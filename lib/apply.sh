@@ -57,11 +57,15 @@ restore_scope() {
       continue
     fi
     mkdir -p "$(dirname "$dst")"
+    local -a trust_exclude=()
+    if [[ $rel == .config || $rel == .config/* ]]; then
+      trust_exclude=(--exclude "omarsync/")
+    fi
     if [[ -d $src && ! -L $src ]]; then
       mkdir -p "$dst"
-      rsync -a --delete "$src/" "$dst/"
+      rsync -a --delete "${trust_exclude[@]}" "$src/" "$dst/"
     else
-      rsync -a "$src" "$dst"
+      rsync -a "${trust_exclude[@]}" "$src" "$dst"
     fi
     log "restored ${rel}"
   done < <(read_scope "$scope_file")
@@ -132,22 +136,38 @@ reload_desktop() {
   fi
 }
 
+assert_pinned() {
+  local mirror="$1"
+  local sha="$2"
+  is_full_sha "$sha" || die "refusing to activate an unpinned revision"
+  local head
+  head=$(git -C "$mirror" rev-parse --verify HEAD)
+  [[ $head == "$sha" ]] || die "mirror HEAD ${head} is not the reviewed commit ${sha}"
+  if git -C "$mirror" symbolic-ref -q HEAD >/dev/null; then
+    die "refusing to apply while the mirror is on a branch"
+  fi
+}
+
 apply_mirror() {
   local mirror="$1"
   local with_packages="$2"
+  local sha="$3"
+  assert_pinned "$mirror" "$sha"
+  log "activating signed commit ${sha}"
   local backup
   backup=$(backup_tree "$mirror")
   log "backed up existing files to ${backup}"
   restore_scope "$mirror"
+  report_plugins "$mirror"
   local failed=0
-  restore_plugins "$mirror" || failed=1
   apply_current "$mirror" || failed=1
   reload_desktop
   if (( with_packages )); then
     install_missing_packages "$mirror" || failed=1
   else
-    log "skipped package install"
+    log "skipped official package install"
   fi
+  assert_pinned "$mirror" "$sha"
   prune_backups
   return "$failed"
 }

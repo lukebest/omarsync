@@ -57,22 +57,8 @@ install_missing_packages() {
   fi
 
   if (( ${#aur[@]} )); then
-    if ! command -v yay >/dev/null 2>&1; then
-      warn "yay is not installed; skipped AUR packages: ${aur[*]}"
-      failed=1
-    else
-      local -a args=()
-      for pkg in "${aur[@]}"; do
-        args+=("aur/${pkg}")
-      done
-      log "installing ${#aur[@]} AUR packages"
-      if ! yay -S --noconfirm "${args[@]}"; then
-        warn "AUR package install failed"
-        failed=1
-      fi
-    fi
-  else
-    log "AUR packages already installed"
+    warn "not installing AUR packages (unpinned build recipes): ${aur[*]}"
+    warn "install a pinned PKGBUILD commit yourself if you still want them"
   fi
 
   return "$failed"

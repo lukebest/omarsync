@@ -26,9 +26,8 @@ export_plugins() {
     return 0
   fi
 
-  local_root="$dest/plugins-local"
-  rm -rf "$local_root"
-  mkdir -p "$local_root"
+  # Plugin trees are executable. Record ids only; never copy them into the snapshot.
+  rm -rf "$dest/plugins-local"
 
   local ndjson=""
   while IFS= read -r row; do
@@ -41,18 +40,15 @@ export_plugins() {
     enabled=$(jq -r 'if .enabled == true then "true" else "false" end' <<<"$row")
     dir=$(plugin_dir "$id")
     url=""
+    rev=""
     if [[ -d $dir/.git ]]; then
       url=$(git -C "$dir" remote get-url origin 2>/dev/null || true)
+      rev=$(git -C "$dir" rev-parse --verify HEAD 2>/dev/null || true)
+      is_full_sha "$rev" || rev=""
     fi
-    if [[ -n $url ]]; then
-      ndjson+=$(jq -nc --arg id "$id" --arg url "$url" --argjson enabled "$enabled" \
-        '{id:$id, url:$url, enabled:$enabled, local:false}')
-      ndjson+=$'\n'
-    elif [[ -d $dir ]]; then
-      mkdir -p "$local_root/$id"
-      rsync -a --delete --exclude '.git/' --exclude 'node_modules/' "$dir/" "$local_root/$id/"
-      ndjson+=$(jq -nc --arg id "$id" --argjson enabled "$enabled" \
-        '{id:$id, url:"", enabled:$enabled, local:true}')
+    if [[ -n $url || -d $dir ]]; then
+      ndjson+=$(jq -nc --arg id "$id" --arg url "$url" --arg rev "$rev" --argjson enabled "$enabled" \
+        '{id:$id, url:$url, commit:$rev, enabled:$enabled, local:($url == "")}')
       ndjson+=$'\n'
     fi
   done < <(jq -c '.[]' <<<"$listing")
@@ -64,79 +60,26 @@ export_plugins() {
   fi
 }
 
-restore_plugins() {
+# Plugin checkouts and omarchy plugin add follow mutable remotes. Apply never
+# installs or enables them. The snapshot only records what was installed.
+report_plugins() {
   local mirror="$1"
-  local failed=0
-  local id dest path row url enabled local_flag
-  local -a enable_ids=()
-
   if [[ -d $mirror/plugins-local ]]; then
-    for path in "$mirror/plugins-local"/*/; do
-      [[ -d $path ]] || continue
-      id=$(basename "$path")
-      [[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "refusing unusual plugin id: ${id}"
-      dest=$(plugin_dir "$id")
-      mkdir -p "$dest"
-      rsync -a --delete "$path" "$dest/"
-      log "restored local plugin ${id}"
-    done
+    warn "ignored plugins-local in the snapshot; omarsync does not install executable plugin trees"
   fi
-
-  if [[ ${OMARSYNC_SKIP_LIVE:-0} == 1 ]]; then
-    if [[ -f $mirror/plugins.json ]]; then
-      jq -r '.[] | select(.local != true and .url != "") | "would add \(.id) from \(.url)"' \
-        "$mirror/plugins.json" || true
+  [[ -f $mirror/plugins.json ]] || return 0
+  local row id url rev
+  while IFS= read -r row; do
+    [[ -n $row ]] || continue
+    id=$(jq -r '.id // ""' <<<"$row")
+    url=$(jq -r '.url // ""' <<<"$row")
+    rev=$(jq -r '.commit // ""' <<<"$row")
+    if [[ -n $url && $rev =~ ^[0-9a-f]{40}$ ]]; then
+      warn "not installing plugin ${id}; pin and install ${url} at ${rev} yourself"
+    elif [[ -n $url ]]; then
+      warn "not installing plugin ${id}; ${url} has no pinned commit"
+    else
+      warn "not installing local plugin ${id}; omarsync does not copy plugin source"
     fi
-    return 0
-  fi
-
-  command -v omarchy >/dev/null 2>&1 || {
-    warn "omarchy is not on PATH; skipped plugin install"
-    return 1
-  }
-
-  if [[ -f $mirror/plugins.json ]]; then
-    while IFS= read -r row; do
-      [[ -n $row ]] || continue
-      id=$(jq -r '.id' <<<"$row")
-      url=$(jq -r '.url // ""' <<<"$row")
-      enabled=$(jq -r 'if .enabled == true then "true" else "false" end' <<<"$row")
-      local_flag=$(jq -r 'if .local == true then "true" else "false" end' <<<"$row")
-      [[ $id =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "refusing unusual plugin id: ${id}"
-      dest=$(plugin_dir "$id")
-      if [[ $local_flag != true && -n $url ]]; then
-        [[ $url =~ ^(https://|git@|ssh://)[^[:space:]]+$ ]] || die "refusing unusual plugin url for ${id}"
-        if [[ ! -d $dest ]]; then
-          log "adding plugin ${id}"
-          if ! omarchy plugin add "$url" --yes; then
-            warn "failed to add plugin ${id}"
-            failed=1
-            continue
-          fi
-        fi
-      fi
-      if [[ $enabled == true ]]; then
-        enable_ids+=("$id")
-      fi
-    done < <(jq -c '.[]' "$mirror/plugins.json")
-  fi
-
-  if command -v omarchy-shell >/dev/null 2>&1; then
-    omarchy-shell shell rescanPlugins || true
-  fi
-
-  if (( ${#enable_ids[@]} > 0 )); then
-    local listed
-    listed=$(omarchy plugin list --json 2>/dev/null || printf '[]')
-    for id in "${enable_ids[@]}"; do
-      if jq -e --arg id "$id" '.[] | select(.id == $id and .enabled == true)' <<<"$listed" >/dev/null 2>&1; then
-        continue
-      fi
-      if ! omarchy plugin enable "$id"; then
-        warn "failed to enable plugin ${id}"
-        failed=1
-      fi
-    done
-  fi
-  return "$failed"
+  done < <(jq -c '.[]' "$mirror/plugins.json")
 }

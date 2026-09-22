@@ -9,7 +9,7 @@ Omarsync records:
 - terminal, Neovim, btop, and lazygit config when those directories exist
 - the current theme name and wallpaper
 - explicitly installed official and AUR packages
-- third-party shell plugins (git remotes, or a copy when a plugin has no remote)
+- a list of third-party shell plugins (id, remote, and commit when the checkout has one). The plugin source itself is not copied or installed
 
 The data repository defaults to a **private** `<github-user>/omarchy-config`. Files over 50MB and any `.git` directory are skipped.
 
@@ -31,7 +31,19 @@ omarchy pkg add github-cli
 2. Choose **Set up repository**. Omarsync creates `you/omarchy-config` if it does not exist and clones it to `~/.local/state/omarsync/repo`.
 3. Choose **Push**.
 
-On the other machine, install the plugin, sign in with a GitHub account that can read the repository, set it up, then choose **Pull and apply**. Apply copies files back into your home directory, restores plugins, sets the theme and wallpaper, reloads the shell and Hyprland, and installs packages that are missing. Package installation asks for sudo in the terminal window.
+On the other machine, install the plugin, sign in with a GitHub account that can read the repository, and trust the same SSH signing key:
+
+```sh
+omarsync trust-key ~/.ssh/id_ed25519.pub
+```
+
+The machine that pushes also passes its private key once, so later commits are signed:
+
+```sh
+omarsync trust-key ~/.ssh/id_ed25519.pub ~/.ssh/id_ed25519
+```
+
+The panel shows the full commit id. **Apply signed commit** runs only for that exact signed snapshot. Apply refuses a branch name, an unsigned commit, or a commit signed by a key that is not in `~/.config/omarsync/trusted-keys`. That file stays on the machine; it is not part of the synced snapshot.
 
 Before it overwrites anything, apply copies the current files to `~/.local/state/omarsync/backup/<timestamp>/` and keeps the last five backups.
 
@@ -50,8 +62,9 @@ Auto push follows the **Auto push** interval (minutes). `0` turns it off. The de
 omarsync login
 omarsync init [owner/name]
 omarsync push
+omarsync trust-key ~/.ssh/id_ed25519.pub ~/.ssh/id_ed25519
 omarsync pull
-omarsync apply [--no-packages]
+omarsync apply --commit <40-character sha> [--no-packages]
 omarsync status
 omarsync doctor
 ```
@@ -76,9 +89,10 @@ The repository is private, but it is still a copy of your configuration. Do not 
 
 - Existing files under each scope path are backed up, then replaced so they match the mirror. Files that were excluded from the sync (for example `*.bak.*`) can be removed on apply because the mirror does not contain them; the backup still has them.
 - A scope path that is missing from the mirror is left untouched.
-- Official packages are installed with `omarchy pkg add`. AUR packages are installed with `yay` when it is available. Packages that exist only on this machine are not removed.
-- Plugins with a git remote are added with `omarchy plugin add` when they are not already installed. Plugins without a remote are copied into `~/.config/omarchy/plugins/<id>/`.
-- The last machine to push wins when both sides edited the same file.
+- Apply resolves the remote branch once, checks out that full commit detached, and checks the signature against `~/.config/omarsync/trusted-keys` before it changes anything. The command has to name that same 40-character id.
+- Official packages from that signed snapshot are installed with `omarchy pkg add`, which uses the signed Arch repositories. AUR names are only printed. Omarsync does not run `yay`.
+- Plugin ids are recorded in `plugins.json`. Omarsync does not copy plugin trees out of the snapshot and does not run `omarchy plugin add` or `omarchy plugin enable`.
+- The last signed push wins when both sides edited the same file.
 
 ## Permissions
 

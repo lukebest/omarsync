@@ -53,6 +53,11 @@ sync_one() {
   while IFS= read -r -d '' part; do
     args+=("$part")
   done < <(exclude_args "$excludes")
+  # The trust policy lives under ~/.config/omarsync and must not be replaced
+  # by a synced parent such as .config.
+  if [[ $rel == .config || $rel == .config/* ]]; then
+    args+=(--exclude "omarsync/")
+  fi
 
   local -a dry=()
   if [[ $mode == check ]]; then

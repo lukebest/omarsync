@@ -31,6 +31,11 @@ function safeRepo(repo) {
   return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repo || ""))
 }
 
+function fullCommit(value) {
+  var sha = String(value || "")
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : ""
+}
+
 function relativeTime(iso) {
   if (!iso)
     return "never"

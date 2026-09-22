@@ -11,6 +11,8 @@ export GH_PROMPT_DISABLED=1
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../lib/common.sh
 source "$ROOT/lib/common.sh"
+# shellcheck source=../lib/trust.sh
+source "$ROOT/lib/trust.sh"
 # shellcheck source=../lib/packages.sh
 source "$ROOT/lib/packages.sh"
 # shellcheck source=../lib/plugins.sh
@@ -31,9 +33,11 @@ Commands:
   init [owner/name]   Create or clone the private data repository
   push [--quiet] [--notify]
                       Collect this machine and push. --quiet skips the notification
-  pull                Fetch and reset the local mirror to origin
-  apply [--no-packages]
-                      Back up, restore the mirror onto this machine, then refresh
+  trust-key <pub> [priv]
+                      Trust an SSH signing key. Pass the private key on the machine that pushes.
+  pull                Fetch once and detach the mirror at that exact commit
+  apply --commit <40-hex> [--no-packages]
+                      Apply that signed commit. The SHA must be the one you reviewed.
   sync [--quiet] [--notify]
                       push, then pull
   scope-path          Print the scope file inside the mirror
@@ -136,8 +140,12 @@ cmd_init() {
     mkdir -p "$mirror"
     git -C "$mirror" init -b "$branch" >/dev/null
     git -C "$mirror" remote add origin "$url"
-    if git -C "$mirror" fetch --quiet origin "$branch" >/dev/null 2>&1; then
-      git -C "$mirror" reset --hard "origin/$branch" >/dev/null
+    if git -C "$mirror" fetch --quiet origin "$branch" >/dev/null 2>&1 \
+      && git -C "$mirror" rev-parse --verify --quiet "refs/remotes/origin/${branch}^{commit}" >/dev/null; then
+      local sha
+      sha=$(git -C "$mirror" rev-parse --verify "refs/remotes/origin/${branch}^{commit}")
+      checkout_pinned_commit "$mirror" "$sha"
+      log "pinned ${sha}"
     else
       log "remote branch ${branch} is empty"
     fi
@@ -164,6 +172,7 @@ cmd_push() {
   mirror=$(mirror_dir)
   branch=$(configured_branch)
   ensure_identity "$mirror"
+  prepare_push_branch "$mirror" "$branch"
   collect_into "$mirror"
   git -C "$mirror" add -A
   if git -C "$mirror" diff --cached --quiet; then
@@ -171,7 +180,13 @@ cmd_push() {
   else
     write_meta "$mirror"
     git -C "$mirror" add -A
-    git -C "$mirror" commit -m "sync from $(hostname_safe) @ $(date -Iseconds)" >/dev/null
+    local -a sign=()
+    if git -C "$mirror" config --get user.signingkey >/dev/null 2>&1; then
+      sign=(-S)
+    else
+      warn "commit is unsigned; apply will reject it until you run omarsync trust-key"
+    fi
+    git -C "$mirror" commit "${sign[@]}" -m "sync from $(hostname_safe) @ $(date -Iseconds)" >/dev/null
     log "committed local changes"
   fi
   if remote_has_branch "$mirror" "$branch"; then
@@ -188,29 +203,44 @@ cmd_push() {
 cmd_pull() {
   lock
   require_mirror
-  local mirror branch
+  local mirror branch sha
   mirror=$(mirror_dir)
   branch=$(configured_branch)
-  git -C "$mirror" fetch --quiet origin "$branch"
-  git -C "$mirror" reset --hard "origin/$branch" >/dev/null
-  log "pulled origin/${branch}"
+  sha=$(resolve_remote_sha "$mirror" "$branch")
+  checkout_pinned_commit "$mirror" "$sha"
+  log "pinned ${sha}"
 }
 
 cmd_apply() {
   local with_packages=1
+  local expected=""
   while (($#)); do
     case "$1" in
       --no-packages) with_packages=0 ;;
+      --commit)
+        [[ $# -ge 2 ]] || die "apply --commit requires a 40-character sha"
+        expected="$2"
+        shift
+        ;;
       *) die "unknown apply option: $1" ;;
     esac
     shift
   done
+  is_full_sha "$expected" || die "apply requires --commit <40-character sha> of the commit you reviewed"
   lock
   require_mirror
-  if apply_mirror "$(mirror_dir)" "$with_packages"; then
-    log "applied $(configured_repo)"
+  local mirror branch sha
+  mirror=$(mirror_dir)
+  branch=$(configured_branch)
+  sha=$(resolve_remote_sha "$mirror" "$branch")
+  [[ $sha == "$expected" ]] || die "origin/${branch} is ${sha}, not the reviewed commit ${expected}"
+  require_trusted_commit "$mirror" "$sha"
+  checkout_pinned_commit "$mirror" "$sha"
+  log "reviewed signed commit ${sha}"
+  if apply_mirror "$mirror" "$with_packages" "$sha"; then
+    log "applied ${sha}"
   else
-    warn "apply finished with errors; files were restored and a backup was kept"
+    warn "apply of ${sha} finished with errors; files were restored and a backup was kept"
     return 1
   fi
 }
@@ -242,16 +272,21 @@ read_counts() {
     printf '0 0\n'
     return 0
   fi
+  local sha
+  sha=$(git -C "$mirror" rev-parse --verify "refs/remotes/origin/${branch}^{commit}")
+  is_full_sha "$sha" || sha=""
   if ! git -C "$mirror" rev-parse --verify --quiet HEAD >/dev/null; then
-    local remote_count
-    remote_count=$(git -C "$mirror" rev-list --count "origin/$branch")
-    printf '%s 0\n' "$remote_count"
+    local remote_count=0
+    if [[ -n $sha ]]; then
+      remote_count=$(git -C "$mirror" rev-list --count "$sha")
+    fi
+    printf '%s 0 %s\n' "$remote_count" "$sha"
     return 0
   fi
   local behind ahead
-  behind=$(git -C "$mirror" rev-list --count "HEAD..origin/$branch")
-  ahead=$(git -C "$mirror" rev-list --count "origin/$branch..HEAD")
-  printf '%s %s\n' "$behind" "$ahead"
+  behind=$(git -C "$mirror" rev-list --count "HEAD..${sha}")
+  ahead=$(git -C "$mirror" rev-list --count "${sha}..HEAD")
+  printf '%s %s %s\n' "$behind" "$ahead" "$sha"
 }
 
 cmd_status() {
@@ -266,6 +301,7 @@ cmd_status() {
 
   local gh_ok=0 logged_in=0 user="" repo="" branch="" initialized=0
   local dirty=0 running=0 behind_json=null ahead_json=null
+  local remote_commit="" pinned_commit="" remote_signed=0
   local last_host="" last_time="" last_version="" error=""
 
   gh_installed && gh_ok=1
@@ -286,12 +322,25 @@ cmd_status() {
       if mirror_dirty "$mirror"; then
         dirty=1
       fi
-      local behind="" ahead=""
-      if read -r behind ahead < <(read_counts "$mirror" "$branch"); then
+      local behind="" ahead="" tip=""
+      if read -r behind ahead tip < <(read_counts "$mirror" "$branch"); then
         behind_json=$behind
         ahead_json=$ahead
+        if is_full_sha "$tip"; then
+          remote_commit=$tip
+          if commit_is_trusted "$mirror" "$tip"; then
+            remote_signed=1
+          fi
+        fi
       else
         error="could not fetch origin"
+      fi
+      if ! git -C "$mirror" symbolic-ref -q HEAD >/dev/null; then
+        local head=""
+        head=$(git -C "$mirror" rev-parse --verify HEAD 2>/dev/null || true)
+        if is_full_sha "$head"; then
+          pinned_commit=$head
+        fi
       fi
     fi
     if [[ -f $mirror/omarsync.json ]]; then
@@ -312,6 +361,9 @@ cmd_status() {
       --argjson dirty "$(json_bool "$dirty")" \
       --argjson behind "$behind_json" \
       --argjson ahead "$ahead_json" \
+      --arg remoteCommit "$remote_commit" \
+      --arg pinnedCommit "$pinned_commit" \
+      --argjson remoteSigned "$(json_bool "$remote_signed")" \
       --arg lastHost "$last_host" \
       --arg lastTime "$last_time" \
       --arg lastVersion "$last_version" \
@@ -327,6 +379,9 @@ cmd_status() {
         dirty: $dirty,
         behind: $behind,
         ahead: $ahead,
+        remoteCommit: $remoteCommit,
+        pinnedCommit: $pinnedCommit,
+        remoteSigned: $remoteSigned,
         lastPush: {host: $lastHost, time: $lastTime, omarchyVersion: $lastVersion},
         running: $running,
         error: $error
@@ -365,6 +420,7 @@ main() {
     status) cmd_status "$@" ;;
     doctor) cmd_doctor "$@" ;;
     login) cmd_login "$@" ;;
+    trust-key) cmd_trust_key "$@" ;;
     init) cmd_init "$@" ;;
     push)
       NOTIFY=1

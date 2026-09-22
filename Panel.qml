@@ -12,6 +12,11 @@ Panel {
 
   readonly property var sync: hostWidget && hostWidget.status ? hostWidget.status : ({})
   readonly property bool ready: sync.initialized === true && sync.loggedIn === true
+  readonly property string trustedCommit: {
+    var sha = String(sync.remoteCommit || "")
+    return /^[0-9a-f]{40}$/.test(sha) ? sha : ""
+  }
+  readonly property bool canApply: ready && sync.remoteSigned === true && trustedCommit !== ""
   readonly property bool working: hostWidget ? hostWidget.busy === true : false
   readonly property color dim: Qt.darker(root.barForeground, 1.35)
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
@@ -141,6 +146,18 @@ Panel {
 
         Text {
           width: parent.width
+          visible: root.trustedCommit !== ""
+          text: root.sync.remoteSigned === true
+            ? ("Signed commit " + root.trustedCommit)
+            : ("Unsigned commit " + root.trustedCommit)
+          color: root.barForeground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WrapAnywhere
+        }
+
+        Text {
+          width: parent.width
           text: root.changeText()
           color: root.barForeground
           font.family: root.fontFamily
@@ -183,8 +200,8 @@ Panel {
 
         Button {
           width: parent.width
-          text: "Pull and apply"
-          enabled: root.ready && !root.working
+          text: root.canApply ? "Apply signed commit" : "Apply signed commit"
+          enabled: root.canApply && !root.working
           opacity: enabled ? 1 : 0.45
           leftAlign: true
           foreground: root.barForeground

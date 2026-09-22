@@ -139,12 +139,16 @@ json_bool() {
 assert_safe_rel() {
   local rel="$1"
   local mirror_rel=".local/state/omarsync"
+  local trust_rel=".config/omarsync"
   [[ -n $rel && $rel != "." && $rel != ".." ]] || die "invalid scope path: '${rel}'"
   [[ $rel != /* ]] || die "scope path must be relative to \$HOME: '${rel}'"
   [[ $rel != *..* ]] || die "scope path may not contain '..': '${rel}'"
   [[ $rel != *$'\n'* ]] || die "scope path may not contain a newline"
   if [[ $rel == "$mirror_rel" || $rel == "$mirror_rel"/* || $mirror_rel == "$rel"/* ]]; then
     die "scope path '${rel}' overlaps the omarsync state directory"
+  fi
+  if [[ $rel == "$trust_rel" || $rel == "$trust_rel"/* ]]; then
+    die "scope path '${rel}' overlaps the local omarsync trust configuration"
   fi
 }
 
@@ -198,35 +202,53 @@ exclude_args() {
   done
 }
 
+config_set() {
+  local key="$1"
+  local value="$2"
+  local file tmp
+  file=$(config_file)
+  mkdir -p "$(dirname "$file")"
+  tmp=$(mktemp)
+  if [[ -f $file ]]; then
+    grep -vE "^${key}=" "$file" >"$tmp" || true
+  fi
+  printf '%s=%s\n' "$key" "$value" >>"$tmp"
+  mv "$tmp" "$file"
+}
+
 ensure_identity() {
   local mirror="$1"
-  git -C "$mirror" config user.name >/dev/null 2>&1 \
-    && git -C "$mirror" config user.email >/dev/null 2>&1 \
-    && return 0
-
   local name="" email="" login="" id=""
-  if gh_logged_in; then
-    name=$(gh api user --jq '.name // .login' 2>/dev/null || true)
-    login=$(gh api user --jq '.login' 2>/dev/null || true)
-    id=$(gh api user --jq '.id' 2>/dev/null || true)
-    if [[ -n $id && -n $login ]]; then
-      email="${id}+${login}@users.noreply.github.com"
+  email=$(config_get SIGNING_EMAIL 2>/dev/null || true)
+  name=$(config_get SIGNING_NAME 2>/dev/null || true)
+  if [[ -z $email ]]; then
+    if gh_logged_in; then
+      name=${name:-$(gh api user --jq '.name // .login' 2>/dev/null || true)}
+      login=$(gh api user --jq '.login' 2>/dev/null || true)
+      id=$(gh api user --jq '.id' 2>/dev/null || true)
+      if [[ -n $id && -n $login ]]; then
+        email="${id}+${login}@users.noreply.github.com"
+      fi
     fi
+    email=${email:-omarsync@localhost}
   fi
   git -C "$mirror" config user.name "${name:-Omarsync}"
-  git -C "$mirror" config user.email "${email:-omarsync@localhost}"
+  git -C "$mirror" config user.email "$email"
+
+  local signing_key=""
+  signing_key=$(config_get SIGNING_KEY 2>/dev/null || true)
+  if [[ -n $signing_key && -f $signing_key ]]; then
+    git -C "$mirror" config gpg.format ssh
+    git -C "$mirror" config user.signingkey "$signing_key"
+    git -C "$mirror" config commit.gpgsign true
+  fi
 }
 
 write_config() {
   local repo="$1"
   local branch="$2"
-  local file
-  file=$(config_file)
-  mkdir -p "$(dirname "$file")"
-  cat >"$file" <<EOF
-REPO=${repo}
-BRANCH=${branch}
-EOF
+  config_set REPO "$repo"
+  config_set BRANCH "$branch"
 }
 
 hostname_safe() {
