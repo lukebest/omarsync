@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.lukebest.omarsync",
+  "name": "Omarsync",
+  "version": "1.0.0",
+  "author": "lukeliu",
+  "license": "MIT",
+  "description": "Sync this Omarchy setup — config, wallpapers, packages, and plugins — to a private GitHub repo.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omarsync",
+    "description": "Push and pull this machine's Omarchy setup through GitHub.",
+    "category": "System",
+    "aliases": ["sync", "backup", "github", "dotfiles"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "autoPushIntervalMin": 0,
+      "notify": true
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Status refresh (seconds)",
+        "min": 30,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300
+      },
+      {
+        "key": "autoPushIntervalMin",
+        "type": "integer",
+        "label": "Auto push (minutes, 0 = off)",
+        "min": 0,
+        "max": 1440,
+        "step": 5,
+        "defaultValue": 0
+      },
+      {
+        "key": "notify",
+        "type": "boolean",
+        "label": "Notify when a push finishes",
+        "defaultValue": true
+      }
+    ]
+  }
+}

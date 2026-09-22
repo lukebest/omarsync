@@ -1,0 +1,14 @@
+# Paths are relative to $HOME. Missing paths are skipped.
+# Optional excludes follow a pipe and are comma-separated rsync patterns.
+# .git directories, node_modules, and files larger than 50MB are always skipped.
+# Do not list .local/state/omarsync — that directory is the local mirror.
+
+.config/omarchy | plugins/,*.bak.*,*.mp4,*.mkv,*.webm,*.mov,*.avi,*.m4v
+.config/hypr | *.bak.*
+.config/alacritty
+.config/ghostty
+.config/kitty
+.config/foot
+.config/nvim
+.config/btop
+.config/lazygit

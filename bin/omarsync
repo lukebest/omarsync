@@ -1,0 +1,404 @@
+#!/usr/bin/env bash
+# Sync an Omarchy setup to a private GitHub repository.
+# shellcheck source=../lib/common.sh
+
+set -euo pipefail
+
+export GIT_TERMINAL_PROMPT=0
+export GIT_EDITOR=true
+export GH_PROMPT_DISABLED=1
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=../lib/common.sh
+source "$ROOT/lib/common.sh"
+# shellcheck source=../lib/packages.sh
+source "$ROOT/lib/packages.sh"
+# shellcheck source=../lib/plugins.sh
+source "$ROOT/lib/plugins.sh"
+# shellcheck source=../lib/collect.sh
+source "$ROOT/lib/collect.sh"
+# shellcheck source=../lib/apply.sh
+source "$ROOT/lib/apply.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: omarsync <command> [options]
+
+Commands:
+  status [--json]     Show login, repo, and whether this machine differs
+  doctor              Check git, rsync, jq, gh, and the local mirror
+  login               Sign in with GitHub CLI (device code, interactive)
+  init [owner/name]   Create or clone the private data repository
+  push [--quiet] [--notify]
+                      Collect this machine and push. --quiet skips the notification
+  pull                Fetch and reset the local mirror to origin
+  apply [--no-packages]
+                      Back up, restore the mirror onto this machine, then refresh
+  sync [--quiet] [--notify]
+                      push, then pull
+  scope-path          Print the scope file inside the mirror
+
+The data repository defaults to <github-user>/omarchy-config.
+Set OMARSYNC_ORIGIN to a git URL to use a non-GitHub remote.
+EOF
+}
+
+require_mirror() {
+  mirror_ready || die "not initialized. Run: omarsync init"
+}
+
+cmd_doctor() {
+  local missing=0
+  local tool
+  for tool in git rsync jq; do
+    if command -v "$tool" >/dev/null 2>&1; then
+      log "ok  ${tool}"
+    else
+      warn "missing ${tool}"
+      missing=1
+    fi
+  done
+  if gh_installed; then
+    if gh_logged_in; then
+      log "ok  gh ($(github_user))"
+    else
+      warn "gh is installed but not logged in. Run: omarsync login"
+    fi
+  else
+    warn "missing gh. Run: omarchy pkg add github-cli"
+    missing=1
+  fi
+  if mirror_ready; then
+    log "ok  mirror $(mirror_dir) ($(configured_repo) $(configured_branch))"
+  else
+    warn "mirror is not initialized. Run: omarsync init"
+  fi
+  return "$missing"
+}
+
+cmd_login() {
+  gh_installed || die "GitHub CLI is not installed. Run: omarchy pkg add github-cli"
+  if gh_logged_in; then
+    log "already logged in as $(github_user)"
+    gh auth setup-git >/dev/null 2>&1 || true
+    return 0
+  fi
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    die "GitHub login needs a terminal. Run: omarsync login"
+  fi
+  gh auth login -h github.com -p https -w
+  gh auth setup-git
+  log "logged in as $(github_user)"
+}
+
+cmd_init() {
+  local repo="${1:-}"
+  local branch="main"
+  local user="" url mirror
+
+  if [[ -z $repo ]]; then
+    repo=$(configured_repo || true)
+  fi
+
+  if [[ -z ${OMARSYNC_ORIGIN:-} ]]; then
+    gh_installed || die "GitHub CLI is not installed. Run: omarchy pkg add github-cli"
+    gh_logged_in || die "not logged in to GitHub. Run: omarsync login"
+    user=$(github_user)
+    [[ -n $user ]] || die "could not read the GitHub user"
+    if [[ -z $repo ]]; then
+      repo="${user}/omarchy-config"
+    fi
+    valid_repo_name "$repo" || die "repository must look like owner/name: ${repo}"
+    if ! gh repo view "$repo" >/dev/null 2>&1; then
+      local owner="${repo%%/*}"
+      local name="${repo#*/}"
+      [[ $owner == "$user" ]] || die "repository ${repo} does not exist and is not owned by ${user}"
+      log "creating private repository ${repo}"
+      gh repo create "$name" --private --description "Omarchy configuration synced by omarsync"
+    fi
+  else
+    [[ -n $repo ]] || repo="local/omarchy-config"
+    valid_repo_name "$repo" || die "repository must look like owner/name: ${repo}"
+  fi
+
+  url=$(origin_url "$repo")
+  mirror=$(mirror_dir)
+  mkdir -p "$(dirname "$mirror")"
+
+  if [[ -d $mirror/.git ]]; then
+    if git -C "$mirror" remote get-url origin >/dev/null 2>&1; then
+      git -C "$mirror" remote set-url origin "$url"
+    else
+      git -C "$mirror" remote add origin "$url"
+    fi
+  else
+    rm -rf "$mirror"
+    mkdir -p "$mirror"
+    git -C "$mirror" init -b "$branch" >/dev/null
+    git -C "$mirror" remote add origin "$url"
+    if git -C "$mirror" fetch --quiet origin "$branch" >/dev/null 2>&1; then
+      git -C "$mirror" reset --hard "origin/$branch" >/dev/null
+    else
+      log "remote branch ${branch} is empty"
+    fi
+  fi
+
+  if [[ ! -f $mirror/omarsync.scope ]]; then
+    cp "$ROOT/omarsync.scope.example" "$mirror/omarsync.scope"
+  fi
+  ensure_identity "$mirror"
+  write_config "$repo" "$branch"
+  log "initialized ${repo} at ${mirror}"
+}
+
+remote_has_branch() {
+  local mirror="$1"
+  local branch="$2"
+  git -C "$mirror" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1
+}
+
+cmd_push() {
+  lock
+  require_mirror
+  local mirror branch
+  mirror=$(mirror_dir)
+  branch=$(configured_branch)
+  ensure_identity "$mirror"
+  collect_into "$mirror"
+  git -C "$mirror" add -A
+  if git -C "$mirror" diff --cached --quiet; then
+    log "no local changes to commit"
+  else
+    write_meta "$mirror"
+    git -C "$mirror" add -A
+    git -C "$mirror" commit -m "sync from $(hostname_safe) @ $(date -Iseconds)" >/dev/null
+    log "committed local changes"
+  fi
+  if remote_has_branch "$mirror" "$branch"; then
+    if ! git -C "$mirror" pull --quiet --rebase -X theirs origin "$branch"; then
+      git -C "$mirror" rebase --abort >/dev/null 2>&1 || true
+      die "rebase onto origin/${branch} failed"
+    fi
+  fi
+  git -C "$mirror" push --quiet -u origin "HEAD:${branch}"
+  log "pushed ${branch}"
+  notify "Omarsync" "Pushed $(configured_repo)"
+}
+
+cmd_pull() {
+  lock
+  require_mirror
+  local mirror branch
+  mirror=$(mirror_dir)
+  branch=$(configured_branch)
+  git -C "$mirror" fetch --quiet origin "$branch"
+  git -C "$mirror" reset --hard "origin/$branch" >/dev/null
+  log "pulled origin/${branch}"
+}
+
+cmd_apply() {
+  local with_packages=1
+  while (($#)); do
+    case "$1" in
+      --no-packages) with_packages=0 ;;
+      *) die "unknown apply option: $1" ;;
+    esac
+    shift
+  done
+  lock
+  require_mirror
+  if apply_mirror "$(mirror_dir)" "$with_packages"; then
+    log "applied $(configured_repo)"
+  else
+    warn "apply finished with errors; files were restored and a backup was kept"
+    return 1
+  fi
+}
+
+cmd_scope_path() {
+  require_mirror
+  local mirror
+  mirror=$(mirror_dir)
+  [[ -f $mirror/omarsync.scope ]] || die "scope file is missing from the mirror"
+  printf '%s\n' "$mirror/omarsync.scope"
+}
+
+read_counts() {
+  local mirror="$1"
+  local branch="$2"
+  local remote_code=0
+  git -C "$mirror" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 || remote_code=$?
+  if (( remote_code == 2 )); then
+    printf '0 0\n'
+    return 0
+  fi
+  if (( remote_code != 0 )); then
+    return 1
+  fi
+  if ! git -C "$mirror" fetch --quiet origin "$branch" >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! git -C "$mirror" rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null; then
+    printf '0 0\n'
+    return 0
+  fi
+  if ! git -C "$mirror" rev-parse --verify --quiet HEAD >/dev/null; then
+    local remote_count
+    remote_count=$(git -C "$mirror" rev-list --count "origin/$branch")
+    printf '%s 0\n' "$remote_count"
+    return 0
+  fi
+  local behind ahead
+  behind=$(git -C "$mirror" rev-list --count "HEAD..origin/$branch")
+  ahead=$(git -C "$mirror" rev-list --count "origin/$branch..HEAD")
+  printf '%s %s\n' "$behind" "$ahead"
+}
+
+cmd_status() {
+  local as_json=0
+  while (($#)); do
+    case "$1" in
+      --json) as_json=1 ;;
+      *) die "unknown status option: $1" ;;
+    esac
+    shift
+  done
+
+  local gh_ok=0 logged_in=0 user="" repo="" branch="" initialized=0
+  local dirty=0 running=0 behind_json=null ahead_json=null
+  local last_host="" last_time="" last_version="" error=""
+
+  gh_installed && gh_ok=1
+  if (( gh_ok )) && gh_logged_in; then
+    logged_in=1
+    user=$(github_user || true)
+  fi
+  repo=$(configured_repo || true)
+  branch=$(configured_branch)
+  if is_running; then
+    running=1
+  fi
+  if mirror_ready; then
+    initialized=1
+    local mirror
+    mirror=$(mirror_dir)
+    if (( ! running )); then
+      if mirror_dirty "$mirror"; then
+        dirty=1
+      fi
+      local behind="" ahead=""
+      if read -r behind ahead < <(read_counts "$mirror" "$branch"); then
+        behind_json=$behind
+        ahead_json=$ahead
+      else
+        error="could not fetch origin"
+      fi
+    fi
+    if [[ -f $mirror/omarsync.json ]]; then
+      last_host=$(jq -r '.host // ""' "$mirror/omarsync.json")
+      last_time=$(jq -r '.pushedAt // ""' "$mirror/omarsync.json")
+      last_version=$(jq -r '.omarchyVersion // ""' "$mirror/omarsync.json")
+    fi
+  fi
+
+  if (( as_json )); then
+    jq -n \
+      --argjson ghInstalled "$(json_bool "$gh_ok")" \
+      --argjson loggedIn "$(json_bool "$logged_in")" \
+      --arg user "$user" \
+      --arg repo "$repo" \
+      --arg branch "$branch" \
+      --argjson initialized "$(json_bool "$initialized")" \
+      --argjson dirty "$(json_bool "$dirty")" \
+      --argjson behind "$behind_json" \
+      --argjson ahead "$ahead_json" \
+      --arg lastHost "$last_host" \
+      --arg lastTime "$last_time" \
+      --arg lastVersion "$last_version" \
+      --argjson running "$(json_bool "$running")" \
+      --arg error "$error" \
+      '{
+        ghInstalled: $ghInstalled,
+        loggedIn: $loggedIn,
+        user: $user,
+        repo: $repo,
+        branch: $branch,
+        initialized: $initialized,
+        dirty: $dirty,
+        behind: $behind,
+        ahead: $ahead,
+        lastPush: {host: $lastHost, time: $lastTime, omarchyVersion: $lastVersion},
+        running: $running,
+        error: $error
+      }'
+    return 0
+  fi
+
+  local github_state="cli missing"
+  if (( logged_in )); then
+    github_state=$user
+  elif (( gh_ok )); then
+    github_state="signed out"
+  fi
+  local mirror_state="not initialized"
+  (( initialized )) && mirror_state="ready"
+  local dirty_state="no"
+  (( dirty )) && dirty_state="yes"
+  log "github: ${github_state}"
+  log "repo: ${repo:-<unset>} (${branch})"
+  log "mirror: ${mirror_state}"
+  log "local changes: ${dirty_state}"
+  log "behind: ${behind_json}  ahead: ${ahead_json}"
+  if [[ -n $last_time ]]; then
+    log "last push: ${last_time} from ${last_host}"
+  fi
+  [[ -z $error ]] || warn "$error"
+}
+
+main() {
+  local cmd="${1:-status}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+  case "$cmd" in
+    -h|--help|help) usage ;;
+    status) cmd_status "$@" ;;
+    doctor) cmd_doctor "$@" ;;
+    login) cmd_login "$@" ;;
+    init) cmd_init "$@" ;;
+    push)
+      NOTIFY=1
+      while (($#)); do
+        case "$1" in
+          --quiet) QUIET=1; NOTIFY=0 ;;
+          --notify) NOTIFY=1 ;;
+          *) die "unknown push option: $1" ;;
+        esac
+        shift
+      done
+      cmd_push
+      ;;
+    pull) cmd_pull "$@" ;;
+    apply) cmd_apply "$@" ;;
+    sync)
+      local -a push_args=()
+      while (($#)); do
+        case "$1" in
+          --quiet|--notify) push_args+=("$1") ;;
+          *) die "unknown sync option: $1" ;;
+        esac
+        shift
+      done
+      "$ROOT/bin/omarsync" push "${push_args[@]}"
+      "$ROOT/bin/omarsync" pull
+      ;;
+    scope-path) cmd_scope_path "$@" ;;
+    *)
+      usage >&2
+      die "unknown command: ${cmd}"
+      ;;
+  esac
+}
+
+require_tools
+main "$@"
