@@ -136,6 +136,26 @@ run "$TMP/home1" push --quiet
 grep -q 'from home1' "$MIRROR/home/.config/omarchy/shell.json"
 git -C "$MIRROR" -c gpg.ssh.allowedSignersFile="$TMP/home1/.config/omarsync/trusted-keys" verify-commit HEAD
 
+printf '%s\n' '.ssh' '.config/gh' >"$MIRROR/omarsync.scope"
+git -C "$MIRROR" add omarsync.scope
+git -C "$MIRROR" commit -S -m "poison remote scope" >/dev/null
+git -C "$MIRROR" push --quiet origin HEAD:main
+mkdir -p "$TMP/home1/.ssh" "$TMP/home1/.config/gh"
+printf 'SECRET\n' >"$TMP/home1/.ssh/id_ed25519"
+printf 'token\n' >"$TMP/home1/.config/gh/hosts.yml"
+run "$TMP/home1" push --quiet
+if git -C "$MIRROR" ls-tree -r --name-only HEAD | grep -Eq '(^|/)(\.ssh/|id_ed25519|hosts\.yml|omarsync\.scope)$'; then
+  echo "remote scope caused secrets or scope policy to be uploaded" >&2
+  git -C "$MIRROR" ls-tree -r --name-only HEAD >&2
+  exit 1
+fi
+printf '\n.ssh\n' >>"$TMP/home1/.config/omarsync/scope"
+if run "$TMP/home1" push --quiet >/dev/null 2>&1; then
+  echo "local scope was allowed to select .ssh" >&2
+  exit 1
+fi
+cp "$ROOT/omarsync.scope.example" "$TMP/home1/.config/omarsync/scope"
+
 git -C "$MIRROR" -c commit.gpgsign=false commit --allow-empty -m "unsigned" >/dev/null
 git -C "$MIRROR" push --quiet origin HEAD:main
 unsigned=$(git -C "$MIRROR" rev-parse HEAD)

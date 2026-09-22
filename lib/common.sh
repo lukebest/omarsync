@@ -138,17 +138,69 @@ json_bool() {
 
 assert_safe_rel() {
   local rel="$1"
-  local mirror_rel=".local/state/omarsync"
-  local trust_rel=".config/omarsync"
+  local banned base
+  local -a banned_paths=(
+    .ssh
+    .config/gh
+    .config/git
+    .config/omarsync
+    .gnupg
+    .aws
+    .kube
+    .docker
+    .netrc
+    .npmrc
+    .config/npm
+    .password-store
+    .local/share/keyrings
+    .local/state/omarsync
+  )
   [[ -n $rel && $rel != "." && $rel != ".." ]] || die "invalid scope path: '${rel}'"
   [[ $rel != /* ]] || die "scope path must be relative to \$HOME: '${rel}'"
   [[ $rel != *..* ]] || die "scope path may not contain '..': '${rel}'"
   [[ $rel != *$'\n'* ]] || die "scope path may not contain a newline"
-  if [[ $rel == "$mirror_rel" || $rel == "$mirror_rel"/* || $mirror_rel == "$rel"/* ]]; then
-    die "scope path '${rel}' overlaps the omarsync state directory"
+  [[ $rel != *'*'* && $rel != *'?'* ]] || die "scope path may not contain globs: '${rel}'"
+  for banned in "${banned_paths[@]}"; do
+    if [[ $rel == "$banned" || $rel == "$banned"/* || $banned == "$rel"/* ]]; then
+      die "scope path '${rel}' includes secret location ${banned}"
+    fi
+  done
+  base=$(basename "$rel")
+  case "$base" in
+    id_rsa|id_ecdsa|id_ed25519|id_rsa.pub|id_ecdsa.pub|id_ed25519.pub|credentials|credentials.json|*.pem|*.key)
+      die "scope path '${rel}' names a credential file"
+      ;;
+  esac
+}
+
+local_scope_file() {
+  printf '%s\n' "$HOME/.config/omarsync/scope"
+}
+
+ensure_local_scope() {
+  local file
+  file=$(local_scope_file)
+  [[ -f $file ]] && return 0
+  mkdir -p "$(dirname "$file")"
+  cp "$ROOT/omarsync.scope.example" "$file"
+  chmod 644 "$file"
+}
+
+# Collection and apply read only this local file. A scope file inside the
+# sync mirror is untrusted remote policy and is never consulted.
+scope_file_for() {
+  ensure_local_scope
+  local_scope_file
+}
+
+discard_remote_scope() {
+  local mirror="$1"
+  [[ -d $mirror ]] || return 0
+  if [[ -e $mirror/omarsync.scope || -L $mirror/omarsync.scope ]]; then
+    rm -f "$mirror/omarsync.scope"
   fi
-  if [[ $rel == "$trust_rel" || $rel == "$trust_rel"/* ]]; then
-    die "scope path '${rel}' overlaps the local omarsync trust configuration"
+  if [[ -d $mirror/.git ]] && git -C "$mirror" ls-files --error-unmatch -- omarsync.scope >/dev/null 2>&1; then
+    git -C "$mirror" rm -q --ignore-unmatch -- omarsync.scope >/dev/null
   fi
 }
 
@@ -157,6 +209,17 @@ trim() {
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "$value"
+}
+
+# Load scope entries in this process. read_scope runs in a command substitution,
+# so a rejected path aborts the caller instead of only the reader.
+load_scope() {
+  local file="$1"
+  local entries=""
+  if ! entries=$(read_scope "$file"); then
+    exit 1
+  fi
+  printf '%s\n' "$entries"
 }
 
 # Print "rel<TAB>exclude,exclude" for each scope entry.
@@ -177,15 +240,6 @@ read_scope() {
     assert_safe_rel "$rel"
     printf '%s\t%s\n' "$rel" "$excludes"
   done <"$file"
-}
-
-scope_file_for() {
-  local mirror="$1"
-  if [[ -f $mirror/omarsync.scope ]]; then
-    printf '%s\n' "$mirror/omarsync.scope"
-  else
-    printf '%s\n' "$ROOT/omarsync.scope.example"
-  fi
 }
 
 exclude_args() {

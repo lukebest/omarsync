@@ -20,10 +20,11 @@ prune_backups() {
 
 backup_tree() {
   local mirror="$1"
-  local stamp dest scope_file rel excludes src
+  local stamp dest scope_file rel excludes src entries
   stamp=$(date +%Y%m%d-%H%M%S)
   dest="$(backup_dir)/$stamp"
-  scope_file=$(scope_file_for "$mirror")
+  scope_file=$(scope_file_for)
+  entries=$(load_scope "$scope_file")
   while IFS=$'\t' read -r rel excludes; do
     [[ -n $rel ]] || continue
     src="$HOME/$rel"
@@ -31,7 +32,7 @@ backup_tree() {
       mkdir -p "$(dirname "$dest/home/$rel")"
       rsync -a "$src" "$(dirname "$dest/home/$rel")/"
     fi
-  done < <(read_scope "$scope_file")
+  done <<<"$entries"
 
   local state="$HOME/.local/state/omarchy/current"
   if [[ -d $state ]]; then
@@ -46,8 +47,9 @@ backup_tree() {
 
 restore_scope() {
   local mirror="$1"
-  local scope_file rel excludes src dst
-  scope_file=$(scope_file_for "$mirror")
+  local scope_file rel excludes src dst entries
+  scope_file=$(scope_file_for)
+  entries=$(load_scope "$scope_file")
   while IFS=$'\t' read -r rel excludes; do
     [[ -n $rel ]] || continue
     src="$mirror/home/$rel"
@@ -68,7 +70,7 @@ restore_scope() {
       rsync -a "${trust_exclude[@]}" "$src" "$dst"
     fi
     log "restored ${rel}"
-  done < <(read_scope "$scope_file")
+  done <<<"$entries"
 }
 
 apply_current() {

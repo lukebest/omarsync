@@ -102,11 +102,12 @@ sync_scope() {
   local scope_file="$2"
   local src_root="$3"
   local dst_root="$4"
-  local rel excludes
+  local rel excludes entries
+  entries=$(load_scope "$scope_file")
   while IFS=$'\t' read -r rel excludes; do
     [[ -n $rel ]] || continue
     sync_one "$mode" "$rel" "$excludes" "$src_root" "$dst_root"
-  done < <(read_scope "$scope_file")
+  done <<<"$entries"
 }
 
 # Drop mirror files that are no longer covered by the scope.
@@ -116,11 +117,12 @@ prune_unscoped() {
   local home="$dst_root/home"
   [[ -d $home ]] || return 0
   local -a rels=()
-  local rel excludes path covered parent
+  local rel excludes path covered parent entries
+  entries=$(load_scope "$scope_file")
   while IFS=$'\t' read -r rel excludes; do
     [[ -n $rel ]] || continue
     rels+=("$rel")
-  done < <(read_scope "$scope_file")
+  done <<<"$entries"
 
   while IFS= read -r path; do
     [[ -n $path ]] || continue
@@ -141,7 +143,8 @@ prune_unscoped() {
 collect_into() {
   local dest="$1"
   local scope_file
-  scope_file=$(scope_file_for "$dest")
+  discard_remote_scope "$dest"
+  scope_file=$(scope_file_for)
   mkdir -p "$dest/home"
   sync_scope apply "$scope_file" "$HOME" "$dest/home"
   prune_unscoped "$scope_file" "$dest"
@@ -153,7 +156,7 @@ collect_into() {
 scope_dirty() {
   local mirror="$1"
   local scope_file out
-  scope_file=$(scope_file_for "$mirror")
+  scope_file=$(scope_file_for)
   out=$(sync_scope check "$scope_file" "$HOME" "$mirror/home")
   [[ -n ${out//[[:space:]]/} ]]
 }
@@ -178,9 +181,6 @@ mirror_dirty() {
   # shellcheck disable=SC2064
   trap "rm -rf '$tmp'" RETURN
   mkdir -p "$tmp"
-  if [[ -f $mirror/omarsync.scope ]]; then
-    cp -f "$mirror/omarsync.scope" "$tmp/omarsync.scope"
-  fi
   export_current "$tmp"
   export_packages "$tmp"
   if ! export_plugins "$tmp" check; then

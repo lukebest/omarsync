@@ -151,9 +151,7 @@ cmd_init() {
     fi
   fi
 
-  if [[ ! -f $mirror/omarsync.scope ]]; then
-    cp "$ROOT/omarsync.scope.example" "$mirror/omarsync.scope"
-  fi
+  ensure_local_scope
   ensure_identity "$mirror"
   write_config "$repo" "$branch"
   log "initialized ${repo} at ${mirror}"
@@ -194,6 +192,15 @@ cmd_push() {
       git -C "$mirror" rebase --abort >/dev/null 2>&1 || true
       die "rebase onto origin/${branch} failed"
     fi
+  fi
+  # Rebase can put a remote omarsync.scope back in the tree. It is not policy.
+  discard_remote_scope "$mirror"
+  if ! git -C "$mirror" diff --cached --quiet; then
+    local -a drop_sign=()
+    if git -C "$mirror" config --get user.signingkey >/dev/null 2>&1; then
+      drop_sign=(-S)
+    fi
+    git -C "$mirror" commit "${drop_sign[@]}" -m "drop untrusted remote scope file" >/dev/null
   fi
   git -C "$mirror" push --quiet -u origin "HEAD:${branch}"
   log "pushed ${branch}"
@@ -246,11 +253,8 @@ cmd_apply() {
 }
 
 cmd_scope_path() {
-  require_mirror
-  local mirror
-  mirror=$(mirror_dir)
-  [[ -f $mirror/omarsync.scope ]] || die "scope file is missing from the mirror"
-  printf '%s\n' "$mirror/omarsync.scope"
+  ensure_local_scope
+  printf '%s\n' "$(local_scope_file)"
 }
 
 read_counts() {

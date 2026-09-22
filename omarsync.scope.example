@@ -1,7 +1,9 @@
+# Installed copy: ~/.config/omarsync/scope
+# This file stays on the machine. The copy inside a sync repository is ignored.
 # Paths are relative to $HOME. Missing paths are skipped.
 # Optional excludes follow a pipe and are comma-separated rsync patterns.
 # .git directories, node_modules, and files larger than 50MB are always skipped.
-# Do not list .local/state/omarsync — that directory is the local mirror.
+# .ssh, .config/gh, key files, and the omarsync trust directory are rejected.
 
 .config/omarchy | plugins/,*.bak.*,*.mp4,*.mkv,*.webm,*.mov,*.avi,*.m4v
 .config/hypr | *.bak.*

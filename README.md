@@ -73,7 +73,7 @@ omarsync doctor
 
 ## What is included
 
-The scope file lives in the data repository as `omarsync.scope`, so both machines share it. Edit it from the panel or in `~/.local/state/omarsync/repo/omarsync.scope`, then push.
+Which files are uploaded is decided only by `~/.config/omarsync/scope` on this machine. Edit it from the panel. A scope file inside the sync repository is ignored, including after `git pull`, and push removes it from the snapshot. Each machine keeps its own scope; a remote edit cannot start uploading new local paths.
 
 ```
 .config/omarchy | plugins/,*.bak.*,*.mp4,*.mkv,*.webm,*.mov,*.avi,*.m4v
@@ -81,9 +81,7 @@ The scope file lives in the data repository as `omarsync.scope`, so both machine
 .config/nvim
 ```
 
-Paths are relative to `$HOME`. Text after `|` is a comma-separated list of rsync exclude patterns. A missing path is skipped. Do not add `.local/state/omarsync`; that directory is the local mirror.
-
-The repository is private, but it is still a copy of your configuration. Do not add directories that contain tokens, keys, or mail. `~/.config/gh` is not part of the default scope.
+Paths are relative to `$HOME`. Text after `|` is a comma-separated list of rsync exclude patterns. A missing path is skipped. Paths that would include `.ssh`, `.config/gh`, `.config/git`, `.gnupg`, key files, or the local omarsync trust directory are rejected.
 
 ## Apply behavior
 

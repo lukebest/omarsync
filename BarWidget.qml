@@ -155,7 +155,7 @@ BarWidget {
     var home = Quickshell.env("HOME") || ""
     if (!root.bar || typeof root.bar.run !== "function")
       return
-    root.bar.run("omarchy-launch-editor " + Model.shellQuote(home + "/.local/state/omarsync/repo/omarsync.scope"))
+    root.bar.run("omarchy-launch-editor " + Model.shellQuote(home + "/.config/omarsync/scope"))
   }
 
   function toggleAutoPush() {
