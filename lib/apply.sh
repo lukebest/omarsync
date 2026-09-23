@@ -45,13 +45,35 @@ backup_tree() {
   printf '%s\n' "$dest"
 }
 
+# Installed plugins are not part of the snapshot. Restoring .config/omarchy
+# with rsync --delete would otherwise remove this checkout of omarsync.
+installed_plugins_rel() {
+  printf '%s\n' ".config/omarchy/plugins"
+}
+
+plugin_restore_excludes() {
+  local rel="$1"
+  local plugins rest
+  plugins=$(installed_plugins_rel)
+  if [[ $plugins == "$rel"/* ]]; then
+    rest="${plugins#"$rel"/}"
+    printf '%s\0' --exclude "${rest}/"
+    printf '%s\0' --exclude "${rest}"
+  fi
+}
+
 restore_scope() {
   local mirror="$1"
-  local scope_file rel excludes src dst entries
+  local scope_file rel excludes src dst entries plugins
   scope_file=$(scope_file_for)
+  plugins=$(installed_plugins_rel)
   entries=$(load_scope "$scope_file")
   while IFS=$'\t' read -r rel excludes; do
     [[ -n $rel ]] || continue
+    if [[ $rel == "$plugins" || $rel == "$plugins"/* ]]; then
+      log "left ${rel} alone so installed plugins stay"
+      continue
+    fi
     src="$mirror/home/$rel"
     dst="$HOME/$rel"
     if [[ ! -e $src && ! -L $src ]]; then
@@ -60,14 +82,19 @@ restore_scope() {
     fi
     mkdir -p "$(dirname "$dst")"
     local -a trust_exclude=()
+    local -a plugin_exclude=()
+    local part
     if [[ $rel == .config || $rel == .config/* ]]; then
       trust_exclude=(--exclude "omarsync/")
     fi
+    while IFS= read -r -d '' part; do
+      plugin_exclude+=("$part")
+    done < <(plugin_restore_excludes "$rel")
     if [[ -d $src && ! -L $src ]]; then
       mkdir -p "$dst"
-      rsync -a --delete "${trust_exclude[@]}" "$src/" "$dst/"
+      rsync -a --delete "${trust_exclude[@]}" "${plugin_exclude[@]}" "$src/" "$dst/"
     else
-      rsync -a "${trust_exclude[@]}" "$src" "$dst"
+      rsync -a "${trust_exclude[@]}" "${plugin_exclude[@]}" "$src" "$dst"
     fi
     log "restored ${rel}"
   done <<<"$entries"

@@ -124,8 +124,12 @@ if run "$TMP/home2" apply --commit 0000000000000000000000000000000000000000 --no
   echo "apply of a different commit should fail" >&2
   exit 1
 fi
+mkdir -p "$TMP/home2/.config/omarchy/plugins/io.github.lukebest.omarsync"
+printf 'stay\n' >"$TMP/home2/.config/omarchy/plugins/io.github.lukebest.omarsync/keep"
 run "$TMP/home2" apply --commit "$sha" --no-packages
 [[ ! -e $TMP/home2/.config/omarchy/plugins/evil ]]
+grep -q '^stay$' "$TMP/home2/.config/omarchy/plugins/io.github.lukebest.omarsync/keep"
+[[ -f $TMP/home2/.config/omarchy/plugins/secret/x ]]
 
 # A new machine has no trusted key. The first apply runs directly and pins the signer.
 setup_home "$TMP/home3"
