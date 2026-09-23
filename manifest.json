@@ -26,8 +26,8 @@
       {
         "key": "refreshIntervalSec",
         "type": "integer",
-        "label": "Status refresh (seconds)",
-        "min": 30,
+        "label": "Status scan (seconds, 0 = manual only)",
+        "min": 0,
         "max": 86400,
         "step": 30,
         "defaultValue": 3600

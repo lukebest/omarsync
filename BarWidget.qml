@@ -238,15 +238,24 @@ BarWidget {
     root.persistSettings({ notify: !root.settingBool("notify", true) })
   }
 
+  function setScanInterval(seconds) {
+    var next = parseInt(seconds, 10)
+    if (isNaN(next) || next < 0)
+      next = 0
+    root.persistSettings({ refreshIntervalSec: next })
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
   onBarChanged: injectPanel()
   onSettingsChanged: injectPanel()
 
+  readonly property int scanIntervalSec: Math.max(0, root.settingInt("refreshIntervalSec", 3600))
+
   Timer {
-    interval: Math.max(30, root.settingInt("refreshIntervalSec", 3600)) * 1000
-    running: true
+    interval: root.scanIntervalSec > 0 ? root.scanIntervalSec * 1000 : 3600000
+    running: root.scanIntervalSec > 0
     repeat: true
     triggeredOnStart: true
     onTriggered: root.refreshStatus()

@@ -55,7 +55,7 @@ Before it overwrites anything, apply copies the current files to `~/.local/state
 - Right click refreshes status.
 - The icon dims until you are signed in, spins while a command is running, and shows a dot when there are local changes to push.
 
-Auto push follows the **Auto push** interval (minutes). `0` turns it off. The default interval after you enable it from the panel is 30 minutes.
+**Scan for changes** defaults to every hour. The same menu can set 15 minutes, 30 minutes, 6 hours, or 24 hours, or turn periodic scanning off. **Scan now**, or a right-click on the icon, checks immediately. Auto push follows the **Auto push** interval (minutes). `0` turns it off. The default interval after you enable it from the panel is 30 minutes.
 
 ## Command line
 

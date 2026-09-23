@@ -24,8 +24,6 @@ Panel {
 
   function open() {
     root.controller.show()
-    if (root.hostWidget && root.hostWidget.refreshStatus)
-      root.hostWidget.refreshStatus()
   }
 
   function close() {
@@ -119,6 +117,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: scanInterval.popupOpen
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
@@ -239,6 +238,38 @@ Panel {
           foreground: root.barForeground
           fontFamily: root.fontFamily
           onClicked: root.callHost("editScope")
+        }
+
+        Dropdown {
+          id: scanInterval
+          width: parent.width
+          label: "Scan for changes"
+          foreground: root.barForeground
+          fontFamily: root.fontFamily
+          value: String(root.hostWidget ? root.hostWidget.settingInt("refreshIntervalSec", 3600) : 3600)
+          options: [
+            { "value": "0", "label": "Off, scan manually" },
+            { "value": "900", "label": "Every 15 minutes" },
+            { "value": "1800", "label": "Every 30 minutes" },
+            { "value": "3600", "label": "Every hour" },
+            { "value": "21600", "label": "Every 6 hours" },
+            { "value": "86400", "label": "Every 24 hours" }
+          ]
+          onChanged: function(value) {
+            if (root.hostWidget && root.hostWidget.setScanInterval)
+              root.hostWidget.setScanInterval(parseInt(value, 10))
+          }
+        }
+
+        Button {
+          width: parent.width
+          text: root.working ? "Scanning…" : "Scan now"
+          enabled: !root.working
+          opacity: enabled ? 1 : 0.45
+          leftAlign: true
+          foreground: root.barForeground
+          fontFamily: root.fontFamily
+          onClicked: root.callHost("refreshStatus")
         }
 
         Toggle {
