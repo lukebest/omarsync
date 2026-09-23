@@ -221,6 +221,15 @@ if ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" apply --commit "$unsigned_tip2" --
   echo "a second unsigned commit was applied" >&2
   exit 1
 fi
+if ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" apply --force --commit 0000000000000000000000000000000000000000 --no-packages >/dev/null 2>&1; then
+  echo "force apply of a different commit should fail" >&2
+  exit 1
+fi
+ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" apply --force --commit "$unsigned_tip2" --no-packages
+grep -q 'second' "$TMP/home5/.config/omarchy/shell.json"
+keys_before=$(cat "$TMP/home3/.config/omarsync/trusted-keys")
+run "$TMP/home3" apply --force --commit "$other" --no-packages
+[[ $(cat "$TMP/home3/.config/omarsync/trusted-keys") == "$keys_before" ]]
 
 if run "$TMP/home1" login </dev/null >/dev/null 2>&1; then
   echo "login should fail without a terminal when GitHub is signed out" >&2

@@ -40,7 +40,7 @@ omarsync trust-key ~/.ssh/id_ed25519.pub ~/.ssh/id_ed25519
 
 On the other machine, install the plugin, sign in with a GitHub account that can read the repository, and set up the repository. The first time, choose **Apply this commit**. That apply does not need a trusted key. If the commit is signed, the signing key is saved in `~/.config/omarsync/trusted-keys` on this PC. If it is not signed, this PC still applies that exact commit once. The trust file stays on the machine; it is not part of the synced snapshot.
 
-Later applies accept only a commit signed by a trusted key. Apply refuses a branch name, an unsigned commit, or a commit signed by a different key. You can pin the public key ahead of time:
+Later applies accept only a commit signed by a trusted key. **Force pull and apply** fetches that same commit and writes it anyway when the signature check would refuse it. Apply still refuses a branch name or a different commit id. You can pin the public key ahead of time:
 
 ```sh
 omarsync trust-key /path/to/the-signing-key.pub
@@ -67,7 +67,7 @@ omarsync init [owner/name]
 omarsync push
 omarsync trust-key ~/.ssh/id_ed25519.pub ~/.ssh/id_ed25519
 omarsync pull
-omarsync apply --commit <40-character sha> [--no-packages]
+omarsync apply --commit <40-character sha> [--no-packages] [--force]
 omarsync status
 omarsync doctor
 ```
@@ -92,7 +92,7 @@ Paths are relative to `$HOME`. Text after `|` is a comma-separated list of rsync
 
 - Existing files under each scope path are backed up, then replaced so they match the mirror. Files that were excluded from the sync (for example `*.bak.*`) can be removed on apply because the mirror does not contain them; the backup still has them.
 - A scope path that is missing from the mirror is left untouched.
-- Apply resolves the remote branch once, checks out that full commit detached, and checks the signature against `~/.config/omarsync/trusted-keys` before it changes anything. The command has to name that same 40-character id. The first apply on a PC with no trusted key can use that commit even when it is unsigned, and pins the signer when the commit is signed. Later applies require a trusted signature.
+- Apply resolves the remote branch once, checks out that full commit detached, and checks the signature against `~/.config/omarsync/trusted-keys` before it changes anything. The command has to name that same 40-character id. The first apply on a PC with no trusted key can use that commit even when it is unsigned, and pins the signer when the commit is signed. Later applies require a trusted signature. `--force` applies that exact commit anyway and does not add the signing key to the trust file.
 - Official packages from that signed snapshot are installed with `omarchy pkg add`, which uses the signed Arch repositories. User Flatpak apps are installed from the recorded remote and then moved to the recorded commit. AUR names are only printed. Omarsync does not run `yay`.
 - Plugin ids are recorded in `plugins.json`. Omarsync does not copy plugin trees out of the snapshot and does not run `omarchy plugin add` or `omarchy plugin enable`.
 - The last signed push wins when both sides edited the same file.

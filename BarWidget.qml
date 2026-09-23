@@ -205,9 +205,16 @@ BarWidget {
 
   function pullAndApply() {
     var sha = Model.fullCommit(root.status.remoteCommit)
-    if (sha === "" || root.status.remoteSigned !== true)
+    if (sha === "")
       return
     root.runInTerminal(root.quotedCli() + " apply --commit " + sha)
+  }
+
+  function forcePullAndApply() {
+    var sha = Model.fullCommit(root.status.remoteCommit)
+    if (sha === "")
+      return
+    root.runInTerminal(root.quotedCli() + " apply --commit " + sha + " --force")
   }
 
   function openRepo() {

@@ -233,6 +233,18 @@ Panel {
 
         Button {
           width: parent.width
+          visible: root.ready && root.trustedCommit !== "" && !root.canApply
+          text: "Force pull and apply"
+          enabled: visible && !root.working
+          opacity: enabled ? 1 : 0.45
+          leftAlign: true
+          foreground: root.barForeground
+          fontFamily: root.fontFamily
+          onClicked: root.callHost("forcePullAndApply")
+        }
+
+        Button {
+          width: parent.width
           text: "Open repository"
           enabled: root.sync.repo !== "" && root.sync.repo !== undefined
           opacity: enabled ? 1 : 0.45
