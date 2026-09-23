@@ -127,22 +127,20 @@ fi
 run "$TMP/home2" apply --commit "$sha" --no-packages
 [[ ! -e $TMP/home2/.config/omarchy/plugins/evil ]]
 
-# A new machine has no trusted key. The first apply pins the signer of this commit.
+# A new machine has no trusted key. The first apply runs directly and pins the signer.
 setup_home "$TMP/home3"
 run "$TMP/home3" init local/omarchy-config
 fresh=$(run "$TMP/home3" status --json)
 [[ $(jq -r '.remoteSigned' <<<"$fresh") == false ]]
 [[ $(jq -r '.remoteSignature' <<<"$fresh") == untrusted ]]
 [[ $(jq -r '.hasTrustedKeys' <<<"$fresh") == false ]]
+[[ $(jq -r '.firstApply' <<<"$fresh") == true ]]
 [[ $(jq -r '.signerFingerprint' <<<"$fresh") == SHA256:* ]]
-if run "$TMP/home3" apply --commit "$sha" --no-packages >/dev/null 2>&1; then
-  echo "first apply without confirmation should fail" >&2
-  exit 1
-fi
-[[ ! -s $TMP/home3/.config/omarsync/trusted-keys ]]
-run "$TMP/home3" apply --trust-signer --commit "$sha" --no-packages
+run "$TMP/home3" apply --commit "$sha" --no-packages
 grep -q 'namespaces="git"' "$TMP/home3/.config/omarsync/trusted-keys"
+[[ -f $TMP/home3/.local/state/omarsync/applied ]]
 [[ $(run "$TMP/home3" status --json | jq -r '.remoteSigned') == true ]]
+[[ $(run "$TMP/home3" status --json | jq -r '.firstApply') == false ]]
 run "$TMP/home3" apply --commit "$sha" --no-packages
 [[ ! -f $TMP/yay.log ]]
 
@@ -202,6 +200,27 @@ if run "$TMP/home3" apply --trust-signer --commit "$other" --no-packages >/dev/n
   exit 1
 fi
 [[ $(cat "$TMP/home3/.config/omarsync/trusted-keys") == "$before" ]]
+
+# A new PC can apply an unsigned commit once, then later unsigned commits are refused.
+UNSIGNED_ORIGIN="$TMP/unsigned.git"
+git init --bare -b main "$UNSIGNED_ORIGIN" >/dev/null
+setup_home "$TMP/home4"
+ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home4" init local/omarchy-config
+ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home4" push --quiet
+unsigned_tip=$(git --git-dir="$UNSIGNED_ORIGIN" rev-parse refs/heads/main)
+setup_home "$TMP/home5"
+ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" init local/omarchy-config
+unsigned_status=$(ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" status --json)
+[[ $(jq -r '.remoteSignature' <<<"$unsigned_status") == none ]]
+[[ $(jq -r '.firstApply' <<<"$unsigned_status") == true ]]
+ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" apply --commit "$unsigned_tip" --no-packages
+printf 'second\n' >"$TMP/home4/.config/omarchy/shell.json"
+ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home4" push --quiet
+unsigned_tip2=$(git --git-dir="$UNSIGNED_ORIGIN" rev-parse refs/heads/main)
+if ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" apply --commit "$unsigned_tip2" --no-packages >/dev/null 2>&1; then
+  echo "a second unsigned commit was applied" >&2
+  exit 1
+fi
 
 if run "$TMP/home1" login </dev/null >/dev/null 2>&1; then
   echo "login should fail without a terminal when GitHub is signed out" >&2

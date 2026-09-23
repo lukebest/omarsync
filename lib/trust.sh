@@ -144,6 +144,46 @@ pubkey_verifies_commit() {
   return "$rc"
 }
 
+applied_stamp_file() {
+  printf '%s\n' "$(state_dir)/applied"
+}
+
+# The first apply on a PC that has never trusted a key may use the exact
+# remote commit even when it is unsigned. The stamp blocks a second one.
+first_apply_available() {
+  if trusted_keys_present; then
+    return 1
+  fi
+  local stamp
+  stamp=$(applied_stamp_file)
+  [[ -f $stamp ]] && return 1
+  return 0
+}
+
+mark_applied() {
+  local sha="$1"
+  local stamp
+  stamp=$(applied_stamp_file)
+  mkdir -p "$(dirname "$stamp")"
+  printf '%s\n' "$sha" >"$stamp"
+}
+
+accept_first_apply() {
+  local mirror="$1"
+  local sha="$2"
+  local pub="" fp=""
+  if pub=$(signature_pubkey_line "$mirror" "$sha"); then
+    fp=$(fingerprint_of_pubkey_line "$pub" || true)
+  fi
+  if [[ -n $pub && -n $fp ]] && pubkey_verifies_commit "$mirror" "$sha" "$pub"; then
+    remember_signer "$pub"
+    log "trusted signer ${fp}"
+    return 0
+  fi
+  log "first apply on this PC; commit ${sha} is not signed"
+  log "later applies require a trusted signature"
+}
+
 remember_signer() {
   local pub="$1"
   local keys entry

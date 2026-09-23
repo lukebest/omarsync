@@ -77,9 +77,9 @@ Commands:
                       Trust an SSH signing key. Pass the private key on the machine that pushes.
   pull                Fetch once and detach the mirror at that exact commit
   apply --commit <40-hex> [--no-packages] [--trust-signer]
-                      Apply that signed commit. The SHA must be the one you reviewed.
-                      The first time this PC has no trusted key, confirm the signer in the
-                      terminal, or pass --trust-signer to pin that key and apply.
+                      Apply that commit. The SHA must be the one you reviewed.
+                      The first apply on a PC with no trusted key runs directly.
+                      Later applies require a trusted signature.
   sync [--quiet] [--notify]
                       push, then pull
   scope-path          Print the scope file inside the mirror
@@ -285,13 +285,28 @@ cmd_apply() {
   branch=$(configured_branch)
   sha=$(resolve_remote_sha "$mirror" "$branch")
   [[ $sha == "$expected" ]] || die "origin/${branch} is ${sha}, not the reviewed commit ${expected}"
-  if ! commit_is_trusted "$mirror" "$sha"; then
-    trust_signer_of_commit "$mirror" "$sha" "$trust_signer"
+  local first=0
+  if first_apply_available; then
+    first=1
   fi
-  require_trusted_commit "$mirror" "$sha"
+  if ! commit_is_trusted "$mirror" "$sha"; then
+    if (( first )); then
+      accept_first_apply "$mirror" "$sha"
+    else
+      trust_signer_of_commit "$mirror" "$sha" "$trust_signer"
+    fi
+  fi
+  if ! commit_is_trusted "$mirror" "$sha" && (( ! first )); then
+    require_trusted_commit "$mirror" "$sha"
+  fi
   checkout_pinned_commit "$mirror" "$sha"
-  log "reviewed signed commit ${sha}"
+  if commit_is_trusted "$mirror" "$sha"; then
+    log "reviewed signed commit ${sha}"
+  else
+    log "reviewed first commit ${sha}"
+  fi
   if apply_mirror "$mirror" "$with_packages" "$sha"; then
+    mark_applied "$sha"
     log "applied ${sha}"
   else
     warn "apply of ${sha} finished with errors; files were restored and a backup was kept"
@@ -353,7 +368,7 @@ cmd_status() {
   local gh_ok=0 logged_in=0 user="" repo="" branch="" initialized=0
   local dirty=0 running=0 behind_json=null ahead_json=null
   local remote_commit="" pinned_commit="" remote_signed=0
-  local remote_signature="none" signer_fingerprint="" has_trusted_keys=0
+  local remote_signature="none" signer_fingerprint="" has_trusted_keys=0 first_apply=0
   local last_host="" last_time="" last_version="" error=""
 
   gh_installed && gh_ok=1
@@ -391,6 +406,9 @@ cmd_status() {
           if [[ $remote_signature == trusted ]]; then
             remote_signed=1
           fi
+          if first_apply_available; then
+            first_apply=1
+          fi
         fi
       else
         error="could not fetch origin"
@@ -427,6 +445,7 @@ cmd_status() {
       --arg remoteSignature "$remote_signature" \
       --arg signerFingerprint "$signer_fingerprint" \
       --argjson hasTrustedKeys "$(json_bool "$has_trusted_keys")" \
+      --argjson firstApply "$(json_bool "$first_apply")" \
       --arg lastHost "$last_host" \
       --arg lastTime "$last_time" \
       --arg lastVersion "$last_version" \
@@ -448,6 +467,7 @@ cmd_status() {
         remoteSignature: $remoteSignature,
         signerFingerprint: $signerFingerprint,
         hasTrustedKeys: $hasTrustedKeys,
+        firstApply: $firstApply,
         lastPush: {host: $lastHost, time: $lastTime, omarchyVersion: $lastVersion},
         running: $running,
         error: $error

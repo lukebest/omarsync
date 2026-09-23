@@ -16,8 +16,9 @@ Panel {
     var sha = String(sync.remoteCommit || "")
     return /^[0-9a-f]{40}$/.test(sha) ? sha : ""
   }
+  readonly property bool firstApply: sync.firstApply === true
   readonly property bool firstTrust: sync.remoteSignature === "untrusted" && sync.hasTrustedKeys !== true
-  readonly property bool canApply: ready && trustedCommit !== "" && (sync.remoteSigned === true || firstTrust)
+  readonly property bool canApply: ready && trustedCommit !== "" && (sync.remoteSigned === true || firstTrust || firstApply)
   readonly property bool working: hostWidget ? hostWidget.busy === true : false
   readonly property color dim: Qt.darker(root.barForeground, 1.35)
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
@@ -161,6 +162,10 @@ Panel {
             var fp = root.sync.signerFingerprint ? (" " + root.sync.signerFingerprint) : ""
             if (root.sync.remoteSigned === true)
               return "Signed commit " + root.trustedCommit + fp
+            if (root.sync.firstApply === true && root.sync.remoteSignature === "untrusted")
+              return "Signed commit " + root.trustedCommit + fp
+            if (root.sync.firstApply === true)
+              return "First apply " + root.trustedCommit
             if (root.sync.remoteSignature === "untrusted" && root.sync.hasTrustedKeys === true)
               return "Signed by a different key" + fp
             if (root.sync.remoteSignature === "untrusted")
@@ -217,7 +222,7 @@ Panel {
 
         Button {
           width: parent.width
-          text: root.firstTrust ? "Trust signing key and apply" : "Apply signed commit"
+          text: (root.firstApply && root.sync.remoteSigned !== true) ? "Apply this commit" : "Apply signed commit"
           enabled: root.canApply && !root.working
           opacity: enabled ? 1 : 0.45
           leftAlign: true

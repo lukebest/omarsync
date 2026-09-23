@@ -153,7 +153,7 @@ apply_mirror() {
   local with_packages="$2"
   local sha="$3"
   assert_pinned "$mirror" "$sha"
-  log "activating signed commit ${sha}"
+  log "activating commit ${sha}"
   local backup
   backup=$(backup_tree "$mirror")
   log "backed up existing files to ${backup}"
