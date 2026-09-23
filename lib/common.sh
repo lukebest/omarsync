@@ -27,8 +27,8 @@ notify() {
   local headline="$1"
   local body="${2:-}"
   (( NOTIFY )) || return 0
-  command -v omarchy-notification-send >/dev/null 2>&1 || return 0
-  omarchy-notification-send --app-name omarsync "$headline" ${body:+"$body"} || true
+  [[ -n ${OMARCHY_NOTIFY_BIN:-} ]] || return 0
+  run_restricted "$OMARCHY_NOTIFY_BIN" --app-name omarsync "$headline" ${body:+"$body"} || true
 }
 
 config_file() {
@@ -71,17 +71,114 @@ origin_url() {
   printf 'https://github.com/%s.git\n' "$repo"
 }
 
+TRUSTED_PATH="/usr/bin:/bin:/usr/sbin:/usr/share/omarchy/bin"
+GIT_BIN=""
+RSYNC_BIN=""
+JQ_BIN=""
+GH_BIN=""
+SSH_KEYGEN_BIN=""
+PACMAN_BIN=""
+OMARCHY_BIN=""
+OMARCHY_SHELL_BIN=""
+OMARCHY_NOTIFY_BIN=""
+HYPRCTL_BIN=""
+DATE_BIN=""
+HOSTNAME_BIN=""
+
+resolve_tool() {
+  local name="$1"
+  local dir candidate real prefix ok
+  [[ $name =~ ^[A-Za-z0-9._+-]+$ ]] || return 1
+  local -a dirs=(/usr/bin /bin /usr/sbin /usr/share/omarchy/bin)
+  for dir in "${dirs[@]}"; do
+    candidate="${dir}/${name}"
+    [[ -x $candidate && ! -d $candidate ]] || continue
+    real=$(/usr/bin/realpath -e "$candidate" 2>/dev/null) || continue
+    ok=0
+    for prefix in "${dirs[@]}"; do
+      if [[ $real == "$prefix" || $real == "$prefix"/* ]]; then
+        ok=1
+        break
+      fi
+    done
+    (( ok )) || continue
+    [[ ! -w $real ]] || continue
+    printf '%s\n' "$real"
+    return 0
+  done
+  return 1
+}
+
+run_restricted() {
+  local exe="$1"
+  shift
+  [[ $exe == /* && -x $exe && ! -w $exe ]] || die "refusing to run an untrusted program: ${exe}"
+  /usr/bin/env -i \
+    "HOME=${HOME}" \
+    "USER=${USER}" \
+    "LOGNAME=${LOGNAME:-$USER}" \
+    "PATH=${TRUSTED_PATH}" \
+    "LANG=C.UTF-8" \
+    "LC_ALL=C.UTF-8" \
+    "OMARCHY_PATH=/usr/share/omarchy" \
+    "GIT_TERMINAL_PROMPT=0" \
+    "GIT_EDITOR=/usr/bin/true" \
+    "GH_PROMPT_DISABLED=1" \
+    ${XDG_RUNTIME_DIR:+"XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}"} \
+    "$exe" "$@"
+}
+
+git() {
+  run_restricted "$GIT_BIN" -c core.hooksPath=/dev/null -c gpg.ssh.program="$SSH_KEYGEN_BIN" "$@"
+}
+
+rsync() {
+  run_restricted "$RSYNC_BIN" "$@"
+}
+
+jq() {
+  run_restricted "$JQ_BIN" "$@"
+}
+
+gh() {
+  [[ -n $GH_BIN ]] || die "GitHub CLI is not installed in a trusted directory"
+  run_restricted "$GH_BIN" "$@"
+}
+
+pacman() {
+  [[ -n $PACMAN_BIN ]] || die "pacman is not installed in a trusted directory"
+  run_restricted "$PACMAN_BIN" "$@"
+}
+
+omarchy() {
+  [[ -n $OMARCHY_BIN ]] || die "omarchy is not installed in a trusted directory"
+  run_restricted "$OMARCHY_BIN" "$@"
+}
+
+omarchy-shell() {
+  [[ -n $OMARCHY_SHELL_BIN ]] || die "omarchy-shell is not installed in a trusted directory"
+  run_restricted "$OMARCHY_SHELL_BIN" "$@"
+}
+
 require_tools() {
   local missing=()
-  local tool
-  for tool in git rsync jq; do
-    command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
-  done
-  (( ${#missing[@]} == 0 )) || die "missing required tools: ${missing[*]}"
+  GIT_BIN=$(resolve_tool git) || missing+=(git)
+  RSYNC_BIN=$(resolve_tool rsync) || missing+=(rsync)
+  JQ_BIN=$(resolve_tool jq) || missing+=(jq)
+  SSH_KEYGEN_BIN=$(resolve_tool ssh-keygen) || missing+=(ssh-keygen)
+  DATE_BIN=$(resolve_tool date) || missing+=(date)
+  HOSTNAME_BIN=$(resolve_tool hostname) || HOSTNAME_BIN=""
+  GH_BIN=$(resolve_tool gh || true)
+  PACMAN_BIN=$(resolve_tool pacman || true)
+  OMARCHY_BIN=$(resolve_tool omarchy || true)
+  OMARCHY_SHELL_BIN=$(resolve_tool omarchy-shell || true)
+  OMARCHY_NOTIFY_BIN=$(resolve_tool omarchy-notification-send || true)
+  HYPRCTL_BIN=$(resolve_tool hyprctl || true)
+  (( ${#missing[@]} == 0 )) || die "missing trusted tools: ${missing[*]}"
 }
 
 gh_installed() {
-  command -v gh >/dev/null 2>&1
+  [[ -n ${GH_BIN:-} && -x $GH_BIN ]]
 }
 
 gh_logged_in() {
@@ -262,7 +359,7 @@ config_set() {
   local file tmp
   file=$(config_file)
   mkdir -p "$(dirname "$file")"
-  tmp=$(mktemp)
+  tmp=$(/usr/bin/mktemp)
   if [[ -f $file ]]; then
     grep -vE "^${key}=" "$file" >"$tmp" || true
   fi
@@ -307,7 +404,11 @@ write_config() {
 
 hostname_safe() {
   local name
-  name=$(hostname 2>/dev/null || printf 'unknown')
+  if [[ -n ${HOSTNAME_BIN:-} ]]; then
+    name=$("$HOSTNAME_BIN" 2>/dev/null || printf 'unknown')
+  else
+    name="unknown"
+  fi
   name=${name//[^A-Za-z0-9._-]/}
   printf '%s\n' "${name:-unknown}"
 }

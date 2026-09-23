@@ -10,11 +10,59 @@ BarWidget {
   moduleName: "io.github.lukebest.omarsync"
 
   readonly property string cliPath: Model.pathFromUrl(Qt.resolvedUrl("bin/omarsync"))
+  readonly property string trustedShell: "/usr/bin/bash"
+  readonly property int outputLimit: 65536
+  readonly property int statusDeadlineMs: 120000
+  readonly property int pushDeadlineMs: 300000
   property var status: ({})
   property bool statusReady: false
+  property bool statusAborted: false
   property string statusError: ""
   property int rememberedAutoMin: 30
   readonly property bool busy: statusProcess.running || pushProcess.running || status.running === true
+
+  function trustedEnvironment() {
+    return {
+      "HOME": Quickshell.env("HOME") || "",
+      "PATH": "/usr/bin:/bin:/usr/sbin:/usr/share/omarchy/bin",
+      "LANG": "C.UTF-8",
+      "LC_ALL": "C.UTF-8",
+      "OMARCHY_PATH": "/usr/share/omarchy"
+    }
+  }
+
+  function boundedText(value) {
+    var text = String(value || "")
+    if (text.length > root.outputLimit)
+      return text.substring(0, root.outputLimit)
+    return text
+  }
+
+  function armProcess(proc) {
+    proc.clearEnvironment = true
+    proc.environment = root.trustedEnvironment()
+  }
+
+  function trustedCommand(args) {
+    var command = [root.trustedShell, root.cliPath]
+    var index
+    for (index = 0; index < args.length; index++)
+      command.push(String(args[index]))
+    return command
+  }
+
+  function expireProcess(proc, message) {
+    if (!proc.running)
+      return
+    if (proc === statusProcess)
+      root.statusAborted = true
+    root.statusError = message
+    proc.signal(15)
+    Qt.callLater(function() {
+      if (proc.running)
+        proc.signal(9)
+    })
+  }
   readonly property bool dirty: status.dirty === true
 
   onBusyChanged: if (!busy) button.textRotation = 0
@@ -89,7 +137,11 @@ BarWidget {
   }
 
   function applyStatus(text) {
-    var parsed = Model.parseStatus(text)
+    if (root.statusAborted) {
+      root.statusAborted = false
+      return
+    }
+    var parsed = Model.parseStatus(root.boundedText(text))
     if (!parsed) {
       root.statusError = "Could not read omarsync status"
       return
@@ -100,19 +152,30 @@ BarWidget {
   }
 
   function refreshStatus() {
-    if (statusProcess.running || root.cliPath === "")
+    if (statusProcess.running || root.cliPath === "" || root.trustedShell === "")
       return
-    statusProcess.command = [root.cliPath, "status", "--json"]
+    var home = Quickshell.env("HOME") || ""
+    if (home === "")
+      return
+    root.statusAborted = false
+    root.armProcess(statusProcess)
+    statusProcess.command = root.trustedCommand(["status", "--json"])
+    statusDeadline.restart()
     statusProcess.running = true
   }
 
   function pushNow() {
-    if (pushProcess.running || root.cliPath === "")
+    if (pushProcess.running || root.cliPath === "" || root.trustedShell === "")
       return
-    var args = [root.cliPath, "push", "--quiet"]
+    var home = Quickshell.env("HOME") || ""
+    if (home === "")
+      return
+    var args = ["push", "--quiet"]
     if (root.settingBool("notify", true))
       args.push("--notify")
-    pushProcess.command = args
+    root.armProcess(pushProcess)
+    pushProcess.command = root.trustedCommand(args)
+    pushDeadline.restart()
     pushProcess.running = true
   }
 
@@ -194,38 +257,84 @@ BarWidget {
     onTriggered: root.pushNow()
   }
 
+  Timer {
+    id: statusDeadline
+    interval: root.statusDeadlineMs
+    repeat: false
+    onTriggered: root.expireProcess(statusProcess, "status timed out")
+  }
+
+  Timer {
+    id: pushDeadline
+    interval: root.pushDeadlineMs
+    repeat: false
+    onTriggered: root.expireProcess(pushProcess, "push timed out")
+  }
+
   Process {
     id: statusProcess
     running: false
+    clearEnvironment: true
     stdout: StdioCollector {
+      id: statusOut
       waitForEnd: true
+      onDataChanged: {
+        if (text.length > root.outputLimit)
+          root.expireProcess(statusProcess, "status output exceeded the limit")
+      }
       onStreamFinished: root.applyStatus(text)
     }
     stderr: StdioCollector {
       waitForEnd: true
+      onDataChanged: {
+        if (text.length > root.outputLimit)
+          root.expireProcess(statusProcess, "status output exceeded the limit")
+      }
       onStreamFinished: {
-        var message = String(text || "").trim()
-        if (message !== "")
+        var message = root.boundedText(text).trim()
+        if (message !== "" && !root.statusAborted)
           root.statusError = message
       }
+    }
+    onExited: function(exitCode, exitStatus) {
+      statusDeadline.stop()
     }
   }
 
   Process {
     id: pushProcess
     running: false
-    stdout: StdioCollector { waitForEnd: true }
+    clearEnvironment: true
+    stdout: StdioCollector {
+      waitForEnd: true
+      onDataChanged: {
+        if (text.length > root.outputLimit)
+          root.expireProcess(pushProcess, "push output exceeded the limit")
+      }
+    }
     stderr: StdioCollector {
       waitForEnd: true
+      onDataChanged: {
+        if (text.length > root.outputLimit)
+          root.expireProcess(pushProcess, "push output exceeded the limit")
+      }
       onStreamFinished: {
-        var message = String(text || "").trim()
+        var message = root.boundedText(text).trim()
         if (message !== "")
           root.statusError = message
       }
     }
     onExited: function(exitCode, exitStatus) {
+      pushDeadline.stop()
       root.refreshStatus()
     }
+  }
+
+  Component.onDestruction: {
+    if (statusProcess.running)
+      statusProcess.signal(9)
+    if (pushProcess.running)
+      pushProcess.signal(9)
   }
 
   Loader {

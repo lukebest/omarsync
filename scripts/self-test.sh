@@ -22,7 +22,12 @@ cat >"$TMP/bin/yay" <<'EOF'
 touch "${OMARSYNC_YAY_LOG:?}"
 exit 0
 EOF
-chmod +x "$TMP/bin/yay"
+cat >"$TMP/bin/git" <<EOF
+#!/bin/sh
+touch "$TMP/git-shadow"
+exit 99
+EOF
+chmod +x "$TMP/bin/yay" "$TMP/bin/git"
 
 setup_home() {
   local home="$1"
@@ -174,4 +179,5 @@ if [[ -n ${BEFORE:-} ]]; then
   [[ $BEFORE == "$AFTER" ]]
 fi
 
+[[ ! -f $TMP/git-shadow ]]
 echo "self-test ok"

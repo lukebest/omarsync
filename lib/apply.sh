@@ -21,7 +21,7 @@ prune_backups() {
 backup_tree() {
   local mirror="$1"
   local stamp dest scope_file rel excludes src entries
-  stamp=$(date +%Y%m%d-%H%M%S)
+  stamp=$("$DATE_BIN" +%Y%m%d-%H%M%S)
   dest="$(backup_dir)/$stamp"
   scope_file=$(scope_file_for)
   entries=$(load_scope "$scope_file")
@@ -128,13 +128,11 @@ reload_desktop() {
   if [[ ${OMARSYNC_SKIP_LIVE:-0} == 1 ]]; then
     return 0
   fi
-  if command -v omarchy-shell >/dev/null 2>&1; then
+  if [[ -n ${OMARCHY_SHELL_BIN:-} ]]; then
     omarchy-shell shell reloadConfig || warn "shell reload failed"
   fi
-  if command -v hyprctl >/dev/null 2>&1; then
-    hyprctl reload || warn "hyprctl reload failed"
-  elif command -v omarchy-refresh-hyprland >/dev/null 2>&1; then
-    omarchy-refresh-hyprland || warn "hyprland refresh failed"
+  if [[ -n ${HYPRCTL_BIN:-} ]]; then
+    run_restricted "$HYPRCTL_BIN" reload || warn "hyprctl reload failed"
   fi
 }
 

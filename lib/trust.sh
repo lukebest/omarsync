@@ -16,8 +16,8 @@ refuse_inside_mirror() {
   mirror=$(mirror_dir)
   [[ -d $mirror ]] || return 0
   local real_path real_mirror
-  real_path=$(realpath "$path")
-  real_mirror=$(realpath "$mirror")
+  real_path=$(/usr/bin/realpath "$path")
+  real_mirror=$(/usr/bin/realpath "$mirror")
   [[ $real_path != "$real_mirror" && $real_path != "$real_mirror"/* ]] \
     || die "refusing a trust file inside the sync mirror: ${path}"
 }

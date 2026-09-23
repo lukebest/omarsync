@@ -33,7 +33,7 @@ write_meta() {
   jq -n \
     --arg host "$(hostname_safe)" \
     --arg omarchyVersion "$version" \
-    --arg pushedAt "$(date -Iseconds)" \
+    --arg pushedAt "$("$DATE_BIN" -Iseconds)" \
     '{schemaVersion: 1, host: $host, omarchyVersion: $omarchyVersion, pushedAt: $pushedAt}' \
     >"$dest/omarsync.json"
 }
@@ -137,7 +137,7 @@ prune_unscoped() {
     if (( covered == 0 )); then
       rm -rf "$path"
     fi
-  done < <(find "$home" -mindepth 1 -depth -print)
+  done < <(/usr/bin/find "$home" -mindepth 1 -depth -print)
 }
 
 collect_into() {
@@ -177,7 +177,7 @@ files_differ() {
 mirror_dirty() {
   local mirror="$1"
   local tmp plugins_known=1
-  tmp=$(mktemp -d)
+  tmp=$(/usr/bin/mktemp -d)
   # shellcheck disable=SC2064
   trap "rm -rf '$tmp'" RETURN
   mkdir -p "$tmp"

@@ -1,12 +1,52 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # Sync an Omarchy setup to a private GitHub repository.
 # shellcheck source=../lib/common.sh
 
 set -euo pipefail
 
+# Drop inherited loader, shell, and PATH state before any library runs.
+# Automatic callers start this through /usr/bin/bash with a cleared environment;
+# a direct invocation re-execs itself the same way.
+if [[ ${OMARSYNC_SANITIZED:-} != 1 ]]; then
+  home=${HOME:-}
+  [[ $home == /* && $home != *$'\n'* && $home != *:* ]] || {
+    printf 'omarsync: HOME must be an absolute path\n' >&2
+    exit 1
+  }
+  user=$(/usr/bin/id -un)
+  uid=$(/usr/bin/id -u)
+  runtime="/run/user/${uid}"
+  origin=${OMARSYNC_ORIGIN:-}
+  keep_origin=""
+  if [[ $origin == /* && $origin != *..* && $origin != *[[:space:]]* ]]; then
+    keep_origin=$origin
+  fi
+  vars=(
+    "HOME=${home}"
+    "USER=${user}"
+    "LOGNAME=${user}"
+    "PATH=/usr/bin:/bin:/usr/sbin:/usr/share/omarchy/bin"
+    "LANG=C.UTF-8"
+    "LC_ALL=C.UTF-8"
+    "OMARCHY_PATH=/usr/share/omarchy"
+    "OMARSYNC_SANITIZED=1"
+    "GIT_TERMINAL_PROMPT=0"
+    "GIT_EDITOR=/usr/bin/true"
+    "GH_PROMPT_DISABLED=1"
+  )
+  [[ -d $runtime ]] && vars+=("XDG_RUNTIME_DIR=${runtime}")
+  [[ ${OMARSYNC_SKIP_LIVE:-} == 1 ]] && vars+=("OMARSYNC_SKIP_LIVE=1")
+  [[ -n $keep_origin ]] && vars+=("OMARSYNC_ORIGIN=${keep_origin}")
+  exec /usr/bin/env -i "${vars[@]}" /usr/bin/bash "$0" "$@"
+fi
+
+export PATH="/usr/bin:/bin:/usr/sbin:/usr/share/omarchy/bin"
 export GIT_TERMINAL_PROMPT=0
-export GIT_EDITOR=true
+export GIT_EDITOR=/usr/bin/true
 export GH_PROMPT_DISABLED=1
+unset LD_PRELOAD LD_LIBRARY_PATH BASH_ENV ENV IFS CDPATH PYTHONPATH NODE_OPTIONS \
+  PERL5OPT RUBYOPT GIT_EXEC_PATH GIT_SSH GIT_SSH_COMMAND GIT_CONFIG_PARAMETERS \
+  GIT_CONFIG_COUNT GH_TOKEN GITHUB_TOKEN SSH_AUTH_SOCK || true
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../lib/common.sh
@@ -184,7 +224,7 @@ cmd_push() {
     else
       warn "commit is unsigned; apply will reject it until you run omarsync trust-key"
     fi
-    git -C "$mirror" commit "${sign[@]}" -m "sync from $(hostname_safe) @ $(date -Iseconds)" >/dev/null
+    git -C "$mirror" commit "${sign[@]}" -m "sync from $(hostname_safe) @ $("$DATE_BIN" -Iseconds)" >/dev/null
     log "committed local changes"
   fi
   if remote_has_branch "$mirror" "$branch"; then

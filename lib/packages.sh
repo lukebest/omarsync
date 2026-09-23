@@ -4,7 +4,7 @@
 export_packages() {
   local dest="$1"
   mkdir -p "$dest/packages"
-  if command -v pacman >/dev/null 2>&1; then
+  if [[ -n ${PACMAN_BIN:-} ]]; then
     pacman -Qqen >"$dest/packages/pacman.txt" || true
     pacman -Qqem >"$dest/packages/aur.txt" || true
   else

@@ -19,7 +19,7 @@ The data repository defaults to a **private** `<github-user>/omarchy-config`. Fi
 omarchy plugin add https://github.com/lukebest/omarsync.git --enable
 ```
 
-Requires `git`, `rsync`, `jq`, and GitHub CLI. If `gh` is missing, the panel can install it:
+Requires `git`, `rsync`, `jq`, and the system GitHub CLI at `/usr/bin/gh`. A copy installed only into a user directory is ignored. If `gh` is missing, the panel can install it:
 
 ```sh
 omarchy pkg add github-cli
@@ -94,7 +94,7 @@ Paths are relative to `$HOME`. Text after `|` is a comma-separated list of rsync
 
 ## Permissions
 
-This plugin runs unsandboxed inside the Omarchy shell, as your user. Push and status run `git`, `rsync`, `pacman -Q`, and `gh`. Apply can overwrite configuration, reload Hyprland, and install packages with sudo. Review the repository before enabling it.
+This plugin runs unsandboxed inside the Omarchy shell, as your user. Automatic status and push start `/usr/bin/bash` with a cleared environment and a fixed `PATH`. The command then runs `git`, `rsync`, `jq`, `gh`, and Omarchy tools only from trusted system directories. Apply can overwrite configuration, reload Hyprland, and install official packages with sudo. Review the repository before enabling it.
 
 `OMARSYNC_ORIGIN` can point git at a non-GitHub remote. That is a development hook; the panel flow uses GitHub.
 
