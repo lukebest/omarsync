@@ -76,8 +76,10 @@ Commands:
   trust-key <pub> [priv]
                       Trust an SSH signing key. Pass the private key on the machine that pushes.
   pull                Fetch once and detach the mirror at that exact commit
-  apply --commit <40-hex> [--no-packages]
+  apply --commit <40-hex> [--no-packages] [--trust-signer]
                       Apply that signed commit. The SHA must be the one you reviewed.
+                      The first time this PC has no trusted key, confirm the signer in the
+                      terminal, or pass --trust-signer to pin that key and apply.
   sync [--quiet] [--notify]
                       push, then pull
   scope-path          Print the scope file inside the mirror
@@ -260,10 +262,12 @@ cmd_pull() {
 
 cmd_apply() {
   local with_packages=1
+  local trust_signer=0
   local expected=""
   while (($#)); do
     case "$1" in
       --no-packages) with_packages=0 ;;
+      --trust-signer) trust_signer=1 ;;
       --commit)
         [[ $# -ge 2 ]] || die "apply --commit requires a 40-character sha"
         expected="$2"
@@ -281,6 +285,9 @@ cmd_apply() {
   branch=$(configured_branch)
   sha=$(resolve_remote_sha "$mirror" "$branch")
   [[ $sha == "$expected" ]] || die "origin/${branch} is ${sha}, not the reviewed commit ${expected}"
+  if ! commit_is_trusted "$mirror" "$sha"; then
+    trust_signer_of_commit "$mirror" "$sha" "$trust_signer"
+  fi
   require_trusted_commit "$mirror" "$sha"
   checkout_pinned_commit "$mirror" "$sha"
   log "reviewed signed commit ${sha}"
@@ -346,6 +353,7 @@ cmd_status() {
   local gh_ok=0 logged_in=0 user="" repo="" branch="" initialized=0
   local dirty=0 running=0 behind_json=null ahead_json=null
   local remote_commit="" pinned_commit="" remote_signed=0
+  local remote_signature="none" signer_fingerprint="" has_trusted_keys=0
   local last_host="" last_time="" last_version="" error=""
 
   gh_installed && gh_ok=1
@@ -372,7 +380,15 @@ cmd_status() {
         ahead_json=$ahead
         if is_full_sha "$tip"; then
           remote_commit=$tip
-          if commit_is_trusted "$mirror" "$tip"; then
+          trusted_keys_present && has_trusted_keys=1
+          local sig_state="" sig_fp=""
+          {
+            read -r sig_state
+            read -r sig_fp
+          } < <(commit_signature_state "$mirror" "$tip")
+          remote_signature=${sig_state:-none}
+          signer_fingerprint=$sig_fp
+          if [[ $remote_signature == trusted ]]; then
             remote_signed=1
           fi
         fi
@@ -408,6 +424,9 @@ cmd_status() {
       --arg remoteCommit "$remote_commit" \
       --arg pinnedCommit "$pinned_commit" \
       --argjson remoteSigned "$(json_bool "$remote_signed")" \
+      --arg remoteSignature "$remote_signature" \
+      --arg signerFingerprint "$signer_fingerprint" \
+      --argjson hasTrustedKeys "$(json_bool "$has_trusted_keys")" \
       --arg lastHost "$last_host" \
       --arg lastTime "$last_time" \
       --arg lastVersion "$last_version" \
@@ -426,6 +445,9 @@ cmd_status() {
         remoteCommit: $remoteCommit,
         pinnedCommit: $pinnedCommit,
         remoteSigned: $remoteSigned,
+        remoteSignature: $remoteSignature,
+        signerFingerprint: $signerFingerprint,
+        hasTrustedKeys: $hasTrustedKeys,
         lastPush: {host: $lastHost, time: $lastTime, omarchyVersion: $lastVersion},
         running: $running,
         error: $error
@@ -448,6 +470,9 @@ cmd_status() {
   log "mirror: ${mirror_state}"
   log "local changes: ${dirty_state}"
   log "behind: ${behind_json}  ahead: ${ahead_json}"
+  if [[ -n $remote_commit ]]; then
+    log "signature: ${remote_signature}${signer_fingerprint:+ ${signer_fingerprint}}"
+  fi
   if [[ -n $last_time ]]; then
     log "last push: ${last_time} from ${last_host}"
   fi

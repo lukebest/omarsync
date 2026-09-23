@@ -126,6 +126,24 @@ if run "$TMP/home2" apply --commit 0000000000000000000000000000000000000000 --no
 fi
 run "$TMP/home2" apply --commit "$sha" --no-packages
 [[ ! -e $TMP/home2/.config/omarchy/plugins/evil ]]
+
+# A new machine has no trusted key. The first apply pins the signer of this commit.
+setup_home "$TMP/home3"
+run "$TMP/home3" init local/omarchy-config
+fresh=$(run "$TMP/home3" status --json)
+[[ $(jq -r '.remoteSigned' <<<"$fresh") == false ]]
+[[ $(jq -r '.remoteSignature' <<<"$fresh") == untrusted ]]
+[[ $(jq -r '.hasTrustedKeys' <<<"$fresh") == false ]]
+[[ $(jq -r '.signerFingerprint' <<<"$fresh") == SHA256:* ]]
+if run "$TMP/home3" apply --commit "$sha" --no-packages >/dev/null 2>&1; then
+  echo "first apply without confirmation should fail" >&2
+  exit 1
+fi
+[[ ! -s $TMP/home3/.config/omarsync/trusted-keys ]]
+run "$TMP/home3" apply --trust-signer --commit "$sha" --no-packages
+grep -q 'namespaces="git"' "$TMP/home3/.config/omarsync/trusted-keys"
+[[ $(run "$TMP/home3" status --json | jq -r '.remoteSigned') == true ]]
+run "$TMP/home3" apply --commit "$sha" --no-packages
 [[ ! -f $TMP/yay.log ]]
 
 grep -q '"changed": true' "$TMP/home2/.config/omarchy/shell.json"
@@ -168,6 +186,22 @@ if run "$TMP/home2" apply --commit "$unsigned" --no-packages >/dev/null 2>&1; th
   echo "unsigned commit was applied" >&2
   exit 1
 fi
+if run "$TMP/home3" apply --trust-signer --commit "$unsigned" --no-packages >/dev/null 2>&1; then
+  echo "trust-signer accepted an unsigned commit" >&2
+  exit 1
+fi
+
+ssh-keygen -t ed25519 -f "$TMP/keys/other" -N "" -C other >/dev/null
+git -C "$MIRROR" -c commit.gpgsign=false -c user.signingkey="$TMP/keys/other" -c gpg.format=ssh \
+  commit -S --allow-empty -m "signed by someone else" >/dev/null
+git -C "$MIRROR" push --quiet origin HEAD:main
+other=$(git -C "$MIRROR" rev-parse HEAD)
+before=$(cat "$TMP/home3/.config/omarsync/trusted-keys")
+if run "$TMP/home3" apply --trust-signer --commit "$other" --no-packages >/dev/null 2>&1; then
+  echo "a second signing key was trusted" >&2
+  exit 1
+fi
+[[ $(cat "$TMP/home3/.config/omarsync/trusted-keys") == "$before" ]]
 
 if run "$TMP/home1" login </dev/null >/dev/null 2>&1; then
   echo "login should fail without a terminal when GitHub is signed out" >&2

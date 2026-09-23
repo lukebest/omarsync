@@ -32,19 +32,21 @@ omarchy pkg add github-cli
 2. Choose **Set up repository**. Omarsync creates `you/omarchy-config` if it does not exist and clones it to `~/.local/state/omarsync/repo`.
 3. Choose **Push**.
 
-On the other machine, install the plugin, sign in with a GitHub account that can read the repository, and trust the same SSH signing key:
-
-```sh
-omarsync trust-key ~/.ssh/id_ed25519.pub
-```
-
-The machine that pushes also passes its private key once, so later commits are signed:
+The machine that pushes passes its private key once, so commits are signed:
 
 ```sh
 omarsync trust-key ~/.ssh/id_ed25519.pub ~/.ssh/id_ed25519
 ```
 
-The panel shows the full commit id. **Apply signed commit** runs only for that exact signed snapshot. Apply refuses a branch name, an unsigned commit, or a commit signed by a key that is not in `~/.config/omarsync/trusted-keys`. That file stays on the machine; it is not part of the synced snapshot.
+On the other machine, install the plugin, sign in with a GitHub account that can read the repository, and set up the repository. The first time, the panel offers **Trust signing key and apply**. The terminal prints the fingerprint of the key that signed that commit. Confirm it matches the machine that pushes, then answer `y`. That pins the key in `~/.config/omarsync/trusted-keys` on this PC. The file stays on the machine; it is not part of the synced snapshot.
+
+Later applies accept only that signed snapshot's key. Apply refuses a branch name, an unsigned commit, or a commit signed by a different key. You can pin the public key ahead of time instead of confirming it at the first apply:
+
+```sh
+omarsync trust-key /path/to/the-signing-key.pub
+```
+
+The panel shows the full commit id. **Apply signed commit** runs only for that exact signed snapshot.
 
 Before it overwrites anything, apply copies the current files to `~/.local/state/omarsync/backup/<timestamp>/` and keeps the last five backups.
 
@@ -90,7 +92,7 @@ Paths are relative to `$HOME`. Text after `|` is a comma-separated list of rsync
 
 - Existing files under each scope path are backed up, then replaced so they match the mirror. Files that were excluded from the sync (for example `*.bak.*`) can be removed on apply because the mirror does not contain them; the backup still has them.
 - A scope path that is missing from the mirror is left untouched.
-- Apply resolves the remote branch once, checks out that full commit detached, and checks the signature against `~/.config/omarsync/trusted-keys` before it changes anything. The command has to name that same 40-character id.
+- Apply resolves the remote branch once, checks out that full commit detached, and checks the signature against `~/.config/omarsync/trusted-keys` before it changes anything. The command has to name that same 40-character id. On a PC that has not trusted a key yet, the first apply can pin the signer of that commit after you confirm the fingerprint.
 - Official packages from that signed snapshot are installed with `omarchy pkg add`, which uses the signed Arch repositories. User Flatpak apps are installed from the recorded remote and then moved to the recorded commit. AUR names are only printed. Omarsync does not run `yay`.
 - Plugin ids are recorded in `plugins.json`. Omarsync does not copy plugin trees out of the snapshot and does not run `omarchy plugin add` or `omarchy plugin enable`.
 - The last signed push wins when both sides edited the same file.
