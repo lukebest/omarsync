@@ -233,9 +233,8 @@ Panel {
 
         Button {
           width: parent.width
-          visible: root.ready && root.trustedCommit !== "" && !root.canApply
           text: "Force pull and apply"
-          enabled: visible && !root.working
+          enabled: root.ready && root.trustedCommit !== "" && !root.working
           opacity: enabled ? 1 : 0.45
           leftAlign: true
           foreground: root.barForeground
