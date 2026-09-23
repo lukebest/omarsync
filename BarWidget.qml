@@ -245,7 +245,7 @@ BarWidget {
   onSettingsChanged: injectPanel()
 
   Timer {
-    interval: Math.max(30, root.settingInt("refreshIntervalSec", 300)) * 1000
+    interval: Math.max(30, root.settingInt("refreshIntervalSec", 3600)) * 1000
     running: true
     repeat: true
     triggeredOnStart: true

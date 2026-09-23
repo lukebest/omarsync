@@ -18,7 +18,7 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "refreshIntervalSec": 300,
+      "refreshIntervalSec": 3600,
       "autoPushIntervalMin": 0,
       "notify": true
     },
@@ -28,9 +28,9 @@
         "type": "integer",
         "label": "Status refresh (seconds)",
         "min": 30,
-        "max": 3600,
+        "max": 86400,
         "step": 30,
-        "defaultValue": 300
+        "defaultValue": 3600
       },
       {
         "key": "autoPushIntervalMin",
