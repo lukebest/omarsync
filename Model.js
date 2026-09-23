@@ -36,6 +36,18 @@ function fullCommit(value) {
   return /^[0-9a-f]{40}$/.test(sha) ? sha : ""
 }
 
+function pluginVersion(manifestText) {
+  try {
+    var data = JSON.parse(String(manifestText || ""))
+    var version = data && data.version ? String(data.version) : ""
+    if (/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(version))
+      return version
+  } catch (error) {
+    // Ignore a manifest that is not JSON yet.
+  }
+  return ""
+}
+
 function relativeTime(iso) {
   if (!iso)
     return "never"

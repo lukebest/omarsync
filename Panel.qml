@@ -20,6 +20,7 @@ Panel {
   readonly property bool working: hostWidget ? hostWidget.busy === true : false
   readonly property color dim: Qt.darker(root.barForeground, 1.35)
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+  readonly property string pluginVersion: hostWidget && hostWidget.version ? String(hostWidget.version) : ""
 
   function open() {
     root.controller.show()
@@ -133,6 +134,15 @@ Panel {
           detail: root.sync.repo || "No repository yet"
           foreground: root.barForeground
           fontFamily: root.fontFamily
+        }
+
+        Text {
+          width: parent.width
+          visible: root.pluginVersion !== ""
+          text: "Version " + root.pluginVersion
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
         }
 
         Text {

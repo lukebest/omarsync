@@ -14,3 +14,5 @@
 .config/nvim
 .config/btop
 .config/lazygit
+.local/share/applications | mimeinfo.cache
+.local/share/icons/hicolor | icon-theme.cache

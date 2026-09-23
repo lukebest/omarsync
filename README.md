@@ -8,8 +8,9 @@ Omarsync records:
 - `~/.config/hypr`
 - terminal, Neovim, btop, and lazygit config when those directories exist
 - the current theme name and wallpaper
-- explicitly installed official and AUR packages
+- explicitly installed official and AUR packages, and user-installed Flatpak apps (such as a Flathub Zotero) pinned to the commit that was installed
 - a list of third-party shell plugins (id, remote, and commit when the checkout has one). The plugin source itself is not copied or installed
+- application launchers in `~/.local/share/applications` and their icons in `~/.local/share/icons/hicolor` (web apps and other Omarchy-installed apps)
 
 The data repository defaults to a **private** `<github-user>/omarchy-config`. Files over 50MB and any `.git` directory are skipped.
 
@@ -79,6 +80,8 @@ Which files are uploaded is decided only by `~/.config/omarsync/scope` on this m
 .config/omarchy | plugins/,*.bak.*,*.mp4,*.mkv,*.webm,*.mov,*.avi,*.m4v
 .config/hypr | *.bak.*
 .config/nvim
+.local/share/applications | mimeinfo.cache
+.local/share/icons/hicolor | icon-theme.cache
 ```
 
 Paths are relative to `$HOME`. Text after `|` is a comma-separated list of rsync exclude patterns. A missing path is skipped. Paths that would include `.ssh`, `.config/gh`, `.config/git`, `.gnupg`, key files, or the local omarsync trust directory are rejected.
@@ -88,7 +91,7 @@ Paths are relative to `$HOME`. Text after `|` is a comma-separated list of rsync
 - Existing files under each scope path are backed up, then replaced so they match the mirror. Files that were excluded from the sync (for example `*.bak.*`) can be removed on apply because the mirror does not contain them; the backup still has them.
 - A scope path that is missing from the mirror is left untouched.
 - Apply resolves the remote branch once, checks out that full commit detached, and checks the signature against `~/.config/omarsync/trusted-keys` before it changes anything. The command has to name that same 40-character id.
-- Official packages from that signed snapshot are installed with `omarchy pkg add`, which uses the signed Arch repositories. AUR names are only printed. Omarsync does not run `yay`.
+- Official packages from that signed snapshot are installed with `omarchy pkg add`, which uses the signed Arch repositories. User Flatpak apps are installed from the recorded remote and then moved to the recorded commit. AUR names are only printed. Omarsync does not run `yay`.
 - Plugin ids are recorded in `plugins.json`. Omarsync does not copy plugin trees out of the snapshot and does not run `omarchy plugin add` or `omarchy plugin enable`.
 - The last signed push wins when both sides edited the same file.
 

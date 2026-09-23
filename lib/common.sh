@@ -82,6 +82,7 @@ OMARCHY_BIN=""
 OMARCHY_SHELL_BIN=""
 OMARCHY_NOTIFY_BIN=""
 HYPRCTL_BIN=""
+FLATPAK_BIN=""
 DATE_BIN=""
 HOSTNAME_BIN=""
 
@@ -160,6 +161,11 @@ omarchy-shell() {
   run_restricted "$OMARCHY_SHELL_BIN" "$@"
 }
 
+flatpak() {
+  [[ -n $FLATPAK_BIN ]] || die "flatpak is not installed in a trusted directory"
+  run_restricted "$FLATPAK_BIN" "$@"
+}
+
 require_tools() {
   local missing=()
   GIT_BIN=$(resolve_tool git) || missing+=(git)
@@ -174,6 +180,7 @@ require_tools() {
   OMARCHY_SHELL_BIN=$(resolve_tool omarchy-shell || true)
   OMARCHY_NOTIFY_BIN=$(resolve_tool omarchy-notification-send || true)
   HYPRCTL_BIN=$(resolve_tool hyprctl || true)
+  FLATPAK_BIN=$(resolve_tool flatpak || true)
   (( ${#missing[@]} == 0 )) || die "missing trusted tools: ${missing[*]}"
 }
 

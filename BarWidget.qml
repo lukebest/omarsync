@@ -10,6 +10,8 @@ BarWidget {
   moduleName: "io.github.lukebest.omarsync"
 
   readonly property string cliPath: Model.pathFromUrl(Qt.resolvedUrl("bin/omarsync"))
+  readonly property string manifestPath: Model.pathFromUrl(Qt.resolvedUrl("manifest.json"))
+  property string version: ""
   readonly property string trustedShell: "/usr/bin/bash"
   readonly property int outputLimit: 65536
   readonly property int statusDeadlineMs: 120000
@@ -337,6 +339,14 @@ BarWidget {
       pushProcess.signal(9)
   }
 
+  FileView {
+    path: root.manifestPath
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.version = Model.pluginVersion(text())
+    onFileChanged: reload()
+  }
+
   Loader {
     id: panelLoader
     active: true
@@ -355,7 +365,9 @@ BarWidget {
     text: "\uf0c2"
     dimmed: root.status.loggedIn !== true
     active: root.dirty || (root.status.behind || 0) > 0
-    tooltipText: root.busy ? "Omarsync is working" : "Omarsync"
+    tooltipText: root.busy
+      ? "Omarsync is working"
+      : (root.version !== "" ? ("Omarsync " + root.version) : "Omarsync")
 
     RotationAnimation on textRotation {
       from: 0
