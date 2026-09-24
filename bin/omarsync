@@ -314,7 +314,7 @@ cmd_apply() {
     mark_applied "$sha"
     log "applied ${sha}"
   else
-    warn "apply of ${sha} finished with errors; files were restored and a backup was kept"
+    warn "apply of ${sha} finished with errors; configuration was written and a backup was kept"
     return 1
   fi
 }

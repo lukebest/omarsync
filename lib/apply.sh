@@ -151,6 +151,23 @@ apply_current() {
   return "$failed"
 }
 
+# The sanitized process does not keep HYPRLAND_INSTANCE_SIGNATURE. The live
+# session is the single runtime directory Hyprland created for this user.
+hypr_instance_signature() {
+  local runtime="${XDG_RUNTIME_DIR:-}"
+  [[ $runtime == /run/user/[0-9]* && -d $runtime/hypr ]] || return 1
+  local -a found=()
+  local dir name
+  for dir in "$runtime/hypr"/*; do
+    [[ -d $dir && -f $dir/hyprland.lock ]] || continue
+    name=${dir##*/}
+    [[ $name =~ ^[0-9a-f]+_[0-9]+_[0-9]+$ ]] || continue
+    found+=("$name")
+  done
+  (( ${#found[@]} == 1 )) || return 1
+  printf '%s\n' "${found[0]}"
+}
+
 reload_desktop() {
   if [[ ${OMARSYNC_SKIP_LIVE:-0} == 1 ]]; then
     return 0
@@ -158,9 +175,20 @@ reload_desktop() {
   if [[ -n ${OMARCHY_SHELL_BIN:-} ]]; then
     omarchy-shell shell reloadConfig || warn "shell reload failed"
   fi
-  if [[ -n ${HYPRCTL_BIN:-} ]]; then
-    run_restricted "$HYPRCTL_BIN" reload || warn "hyprctl reload failed"
+  [[ -n ${HYPRCTL_BIN:-} ]] || return 0
+  local sig
+  if ! sig=$(hypr_instance_signature); then
+    warn "hyprctl reload skipped; this user has no single Hyprland session"
+    return 0
   fi
+  /usr/bin/env -i \
+    "HOME=${HOME}" \
+    "USER=${USER}" \
+    "LOGNAME=${LOGNAME:-$USER}" \
+    "PATH=${TRUSTED_PATH}" \
+    "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}" \
+    "HYPRLAND_INSTANCE_SIGNATURE=${sig}" \
+    "$HYPRCTL_BIN" reload || warn "hyprctl reload failed"
 }
 
 assert_pinned() {

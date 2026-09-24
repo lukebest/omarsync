@@ -88,7 +88,7 @@ Paths are relative to `$HOME`. Text after `|` is a comma-separated list of rsync
 - A scope path that is missing from the mirror is left untouched.
 - Apply does not remove `~/.config/omarchy/plugins`. Snapshots omit that directory, so replacing `.config/omarchy` would otherwise delete omarsync and the other installed plugins.
 - Apply resolves the remote branch once, checks out that full commit detached, and checks the signature against `~/.config/omarsync/trusted-keys` before it changes anything. The command has to name that same 40-character id. The first apply on a PC with no trusted key can use that commit even when it is unsigned, and pins the signer when the commit is signed. Later applies require a trusted signature. `--force` applies that exact commit anyway and does not add the signing key to the trust file.
-- Official packages from that signed snapshot are installed with `omarchy pkg add`, which uses the signed Arch repositories. User Flatpak apps are installed from the recorded remote and then moved to the recorded commit. AUR names are only printed. Omarsync does not run `yay`.
+- Official packages from that signed snapshot are installed with `omarchy pkg add`, which uses the signed Arch repositories. User Flatpak apps are installed from the recorded remote and then moved to the recorded commit. A missing Flathub user remote is added from Flathub. An app whose remote has no download URL, such as a disabled local origin, is skipped. AUR names are only printed. Omarsync does not run `yay`.
 - Plugin ids are recorded in `plugins.json`. Omarsync does not copy plugin trees out of the snapshot and does not run `omarchy plugin add` or `omarchy plugin enable`.
 - The last signed push wins when both sides edited the same file.
 
