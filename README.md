@@ -30,13 +30,7 @@ omarchy pkg add github-cli
 
 1. Click the cloud icon and choose **Sign in to GitHub**. That runs `gh auth login` in a terminal.
 2. Choose **Set up repository**. Omarsync creates `you/omarchy-config` if it does not exist and clones it to `~/.local/state/omarsync/repo`.
-3. Choose **Push**.
-
-The machine that pushes passes its private key once, so commits are signed:
-
-```sh
-omarsync trust-key ~/.ssh/id_ed25519.pub ~/.ssh/id_ed25519
-```
+3. Choose **Push**. The commit is signed. Push uses `~/.ssh/id_ed25519` when that key has no passphrase. Otherwise it creates `~/.config/omarsync/signing_key` and trusts that key on this machine. The private key stays local.
 
 On the other machine, install the plugin, sign in with a GitHub account that can read the repository, and set up the repository. The first time, choose **Apply this commit**. That apply does not need a trusted key. If the commit is signed, the signing key is saved in `~/.config/omarsync/trusted-keys` on this PC. If it is not signed, this PC still applies that exact commit once. The trust file stays on the machine; it is not part of the synced snapshot.
 
@@ -65,7 +59,7 @@ Before it overwrites anything, apply copies the current files to `~/.local/state
 omarsync login
 omarsync init [owner/name]
 omarsync push
-omarsync trust-key ~/.ssh/id_ed25519.pub ~/.ssh/id_ed25519
+omarsync trust-key <public-key> [private-key]
 omarsync pull
 omarsync apply --commit <40-character sha> [--no-packages] [--force]
 omarsync status

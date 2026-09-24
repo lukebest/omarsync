@@ -72,9 +72,12 @@ Commands:
   login               Sign in with GitHub CLI (device code, interactive)
   init [owner/name]   Create or clone the private data repository
   push [--quiet] [--notify]
-                      Collect this machine and push. --quiet skips the notification
+                      Collect this machine and push a signed commit.
+                      Uses ~/.ssh/id_ed25519 when it has no passphrase,
+                      otherwise a key in ~/.config/omarsync/. --quiet skips the notification
   trust-key <pub> [priv]
-                      Trust an SSH signing key. Pass the private key on the machine that pushes.
+                      Trust an SSH signing key. Push does this for its own key.
+                      Pass a public key to trust another machine ahead of time.
   pull                Fetch once and detach the mirror at that exact commit
   apply --commit <40-hex> [--no-packages] [--trust-signer] [--force]
                       Apply that commit. The SHA must be the one you reviewed.
@@ -213,6 +216,7 @@ cmd_push() {
   local mirror branch
   mirror=$(mirror_dir)
   branch=$(configured_branch)
+  ensure_push_signer
   ensure_identity "$mirror"
   prepare_push_branch "$mirror" "$branch"
   collect_into "$mirror"
@@ -222,13 +226,7 @@ cmd_push() {
   else
     write_meta "$mirror"
     git -C "$mirror" add -A
-    local -a sign=()
-    if git -C "$mirror" config --get user.signingkey >/dev/null 2>&1; then
-      sign=(-S)
-    else
-      warn "commit is unsigned; apply will reject it until you run omarsync trust-key"
-    fi
-    git -C "$mirror" commit "${sign[@]}" -m "sync from $(hostname_safe) @ $("$DATE_BIN" -Iseconds)" >/dev/null
+    git -C "$mirror" commit -S -m "sync from $(hostname_safe) @ $("$DATE_BIN" -Iseconds)" >/dev/null
     log "committed local changes"
   fi
   if remote_has_branch "$mirror" "$branch"; then
@@ -240,12 +238,9 @@ cmd_push() {
   # Rebase can put a remote omarsync.scope back in the tree. It is not policy.
   discard_remote_scope "$mirror"
   if ! git -C "$mirror" diff --cached --quiet; then
-    local -a drop_sign=()
-    if git -C "$mirror" config --get user.signingkey >/dev/null 2>&1; then
-      drop_sign=(-S)
-    fi
-    git -C "$mirror" commit "${drop_sign[@]}" -m "drop untrusted remote scope file" >/dev/null
+    git -C "$mirror" commit -S -m "drop untrusted remote scope file" >/dev/null
   fi
+  sign_untrusted_tip "$mirror"
   git -C "$mirror" push --quiet -u origin "HEAD:${branch}"
   log "pushed ${branch}"
   notify "Omarsync" "Pushed $(configured_repo)"

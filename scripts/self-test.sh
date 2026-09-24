@@ -75,6 +75,7 @@ setup_home "$TMP/home1"
 run "$TMP/home1" trust-key "$TMP/keys/id.pub" "$TMP/keys/id"
 run "$TMP/home1" init local/omarchy-config
 run "$TMP/home1" push --quiet
+grep -qxF "SIGNING_KEY=$TMP/keys/id" "$TMP/home1/.config/omarsync/config"
 git -C "$TMP/home1/.local/state/omarsync/repo" \
   -c gpg.ssh.allowedSignersFile="$TMP/home1/.config/omarsync/trusted-keys" \
   verify-commit HEAD
@@ -205,12 +206,46 @@ if run "$TMP/home3" apply --trust-signer --commit "$other" --no-packages >/dev/n
 fi
 [[ $(cat "$TMP/home3/.config/omarsync/trusted-keys") == "$before" ]]
 
+# Push signs by itself. A passphrase-protected default key is left unused.
+SIGN_ORIGIN="$TMP/sign.git"
+git init --bare -b main "$SIGN_ORIGIN" >/dev/null
+setup_home "$TMP/home4"
+mkdir -p "$TMP/home4/.ssh"
+ssh-keygen -q -t ed25519 -f "$TMP/home4/.ssh/id_ed25519" -N "secret" -C locked
+ORIGIN="$SIGN_ORIGIN" run "$TMP/home4" init local/omarchy-config
+ORIGIN="$SIGN_ORIGIN" run "$TMP/home4" push --quiet
+grep -qxF "SIGNING_KEY=$TMP/home4/.config/omarsync/signing_key" "$TMP/home4/.config/omarsync/config"
+git -C "$TMP/home4/.local/state/omarsync/repo" \
+  -c gpg.ssh.allowedSignersFile="$TMP/home4/.config/omarsync/trusted-keys" \
+  verify-commit HEAD
+if git -C "$TMP/home4/.local/state/omarsync/repo" ls-tree -r --name-only HEAD | grep -q signing_key; then
+  echo "signing key was uploaded" >&2
+  exit 1
+fi
+
 # A new PC can apply an unsigned commit once, then later unsigned commits are refused.
 UNSIGNED_ORIGIN="$TMP/unsigned.git"
 git init --bare -b main "$UNSIGNED_ORIGIN" >/dev/null
-setup_home "$TMP/home4"
-ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home4" init local/omarchy-config
-ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home4" push --quiet
+plant_unsigned() {
+  local content="$1"
+  local message="$2"
+  local work="$TMP/unsigned-work"
+  rm -rf "$work"
+  if git --git-dir="$UNSIGNED_ORIGIN" rev-parse --verify --quiet refs/heads/main >/dev/null; then
+    git clone -q "$UNSIGNED_ORIGIN" "$work"
+  else
+    git init -q -b main "$work"
+    git -C "$work" remote add origin "$UNSIGNED_ORIGIN"
+  fi
+  git -C "$work" config user.email test@example.com
+  git -C "$work" config user.name test
+  mkdir -p "$work/home/.config/omarchy"
+  printf '%s\n' "$content" >"$work/home/.config/omarchy/shell.json"
+  git -C "$work" add -A
+  git -C "$work" -c commit.gpgsign=false commit -q -m "$message"
+  git -C "$work" push -q origin HEAD:main
+}
+plant_unsigned 'unsigned' 'unsigned snapshot'
 unsigned_tip=$(git --git-dir="$UNSIGNED_ORIGIN" rev-parse refs/heads/main)
 setup_home "$TMP/home5"
 ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" init local/omarchy-config
@@ -218,8 +253,7 @@ unsigned_status=$(ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" status --json)
 [[ $(jq -r '.remoteSignature' <<<"$unsigned_status") == none ]]
 [[ $(jq -r '.firstApply' <<<"$unsigned_status") == true ]]
 ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" apply --commit "$unsigned_tip" --no-packages
-printf 'second\n' >"$TMP/home4/.config/omarchy/shell.json"
-ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home4" push --quiet
+plant_unsigned 'second' 'second unsigned snapshot'
 unsigned_tip2=$(git --git-dir="$UNSIGNED_ORIGIN" rev-parse refs/heads/main)
 if ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" apply --commit "$unsigned_tip2" --no-packages >/dev/null 2>&1; then
   echo "a second unsigned commit was applied" >&2

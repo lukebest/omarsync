@@ -267,6 +267,112 @@ prepare_push_branch() {
   git -C "$mirror" checkout -q -B "$branch"
 }
 
+record_trusted_signer() {
+  local type="$1"
+  local keydata="$2"
+  local priv="${3:-}"
+  [[ $type == ssh-* ]] || die "not an ssh public key"
+  [[ $keydata =~ ^[A-Za-z0-9+/=]+$ ]] || die "malformed ssh public key"
+  if [[ -n $priv ]]; then
+    [[ -f $priv && ! -L $priv ]] || die "private key not found: ${priv}"
+    refuse_inside_mirror "$priv"
+  fi
+
+  local email
+  email=$(config_get SIGNING_EMAIL 2>/dev/null || true)
+  if [[ -z $email ]]; then
+    email="omarsync@localhost"
+    config_set SIGNING_EMAIL "$email"
+  fi
+
+  local keys entry
+  keys=$(trusted_keys_file)
+  refuse_inside_mirror "$keys"
+  mkdir -p "$(dirname "$keys")"
+  [[ -f $keys ]] || : >"$keys"
+  chmod 644 "$keys"
+  entry="${email} namespaces=\"git\" ${type} ${keydata}"
+  if ! grep -qxF "$entry" "$keys"; then
+    printf '%s\n' "$entry" >>"$keys"
+  fi
+  if [[ -n $priv ]]; then
+    config_set SIGNING_KEY "$priv"
+  fi
+  log "trusted ${type} key for ${email}"
+}
+
+# Print the public key line when this private key can sign without a prompt.
+private_key_pub() {
+  local priv="$1"
+  [[ -n $priv && -f $priv && ! -L $priv ]] || return 1
+  local mirror real_path real_mirror
+  mirror=$(mirror_dir)
+  if [[ -d $mirror ]]; then
+    real_path=$(/usr/bin/realpath -e "$priv" 2>/dev/null) || return 1
+    real_mirror=$(/usr/bin/realpath -e "$mirror" 2>/dev/null) || return 1
+    [[ $real_path != "$real_mirror" && $real_path != "$real_mirror"/* ]] || return 1
+  fi
+  local mode
+  mode=$(/usr/bin/stat -c '%a' "$priv" 2>/dev/null) || return 1
+  [[ $mode =~ ^[0-7]+$ ]] || return 1
+  [[ $(( 8#$mode & 022 )) -eq 0 ]] || return 1
+  local pub
+  pub=$(run_restricted "$SSH_KEYGEN_BIN" -y -f "$priv" -P "" 2>/dev/null) || return 1
+  [[ $pub =~ ^ssh-[a-z0-9-]+[[:space:]]+[A-Za-z0-9+/=]+([[:space:]].*)?$ ]] || return 1
+  printf '%s\n' "$pub"
+}
+
+dedicated_signing_key() {
+  printf '%s\n' "$HOME/.config/omarsync/signing_key"
+}
+
+create_dedicated_signing_key() {
+  local priv="$1"
+  [[ ! -e $priv && ! -L $priv && ! -e ${priv}.pub && ! -L ${priv}.pub ]] \
+    || die "cannot create a signing key at ${priv}"
+  refuse_inside_mirror "$priv"
+  mkdir -p "$(dirname "$priv")"
+  run_restricted "$SSH_KEYGEN_BIN" -q -t ed25519 -f "$priv" -N "" -C "omarsync@$(hostname_safe)"
+  /usr/bin/chmod 600 "$priv"
+}
+
+# Push signs with the configured key, otherwise ~/.ssh/id_ed25519 when that
+# key has no passphrase, otherwise a key kept in ~/.config/omarsync/.
+ensure_push_signer() {
+  local configured="" priv="" pub=""
+  configured=$(config_get SIGNING_KEY 2>/dev/null || true)
+  if [[ -n $configured ]]; then
+    pub=$(private_key_pub "$configured") || die "SIGNING_KEY cannot sign without a prompt: ${configured}"
+    priv=$configured
+  elif pub=$(private_key_pub "$HOME/.ssh/id_ed25519"); then
+    priv="$HOME/.ssh/id_ed25519"
+    log "signing with ~/.ssh/id_ed25519"
+  else
+    priv=$(dedicated_signing_key)
+    if ! pub=$(private_key_pub "$priv"); then
+      create_dedicated_signing_key "$priv"
+      pub=$(private_key_pub "$priv") || die "could not create a signing key"
+    fi
+    log "signing with ${priv}"
+  fi
+  local type keydata
+  read -r type keydata _ <<<"$pub"
+  record_trusted_signer "$type" "$keydata" "$priv"
+}
+
+sign_untrusted_tip() {
+  local mirror="$1"
+  local sha=""
+  if git -C "$mirror" rev-parse --verify --quiet HEAD >/dev/null; then
+    sha=$(git -C "$mirror" rev-parse --verify HEAD)
+    if commit_is_trusted "$mirror" "$sha"; then
+      return 0
+    fi
+    log "signing the snapshot"
+  fi
+  git -C "$mirror" commit -S --allow-empty -m "sign snapshot from $(hostname_safe) @ $("$DATE_BIN" -Iseconds)" >/dev/null
+}
+
 cmd_trust_key() {
   local pub="${1:-}"
   local priv="${2:-}"
@@ -279,27 +385,5 @@ cmd_trust_key() {
 
   local type keydata
   read -r type keydata _ <"$pub"
-  [[ $type == ssh-* ]] || die "not an ssh public key: ${pub}"
-  [[ $keydata =~ ^[A-Za-z0-9+/=]+$ ]] || die "malformed ssh public key"
-
-  local email
-  email=$(config_get SIGNING_EMAIL 2>/dev/null || true)
-  if [[ -z $email ]]; then
-    email="omarsync@localhost"
-    config_set SIGNING_EMAIL "$email"
-  fi
-
-  local keys entry
-  keys=$(trusted_keys_file)
-  mkdir -p "$(dirname "$keys")"
-  [[ -f $keys ]] || : >"$keys"
-  chmod 644 "$keys"
-  entry="${email} namespaces=\"git\" ${type} ${keydata}"
-  if ! grep -qxF "$entry" "$keys"; then
-    printf '%s\n' "$entry" >>"$keys"
-  fi
-  if [[ -n $priv ]]; then
-    config_set SIGNING_KEY "$priv"
-  fi
-  log "trusted ${type} key for ${email}"
+  record_trusted_signer "$type" "$keydata" "$priv"
 }
