@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.lukebest.omarsync",
   "name": "Omarsync",
-  "version": "1.9.1",
+  "version": "1.10.0",
   "author": "lukeliu",
   "license": "MIT",
   "description": "Sync this Omarchy setup — config, wallpapers, packages, and plugins — to a private GitHub repo.",

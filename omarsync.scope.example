@@ -14,5 +14,9 @@
 .config/nvim
 .config/btop
 .config/lazygit
+.config/autostart
+.local/share/flatpak/overrides
+.config/systemd/user
+.local/bin | agent,cursor,cursor-agent
 .local/share/applications | mimeinfo.cache
 .local/share/icons/hicolor | icon-theme.cache

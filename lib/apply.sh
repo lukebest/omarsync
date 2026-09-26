@@ -207,13 +207,13 @@ apply_mirror() {
   local mirror="$1"
   local with_packages="$2"
   local sha="$3"
+  local with_exec="${4:-0}"
   assert_pinned "$mirror" "$sha"
   log "activating commit ${sha}"
   local backup
   backup=$(backup_tree "$mirror")
   log "backed up existing files to ${backup}"
   restore_scope "$mirror"
-  report_plugins "$mirror"
   local failed=0
   apply_current "$mirror" || failed=1
   reload_desktop
@@ -222,7 +222,67 @@ apply_mirror() {
   else
     log "skipped official package install"
   fi
+  install_missing_plugins "$mirror" "$with_exec" || failed=1
+  refresh_user_services || failed=1
+  run_hooks "$mirror" "$with_exec" || failed=1
   assert_pinned "$mirror" "$sha"
   prune_backups
   return "$failed"
+}
+
+preview_apply() {
+  local mirror="$1"
+  local sha="$2"
+  local with_exec="$3"
+  log "commit ${sha}"
+  local rel
+  if [[ -d $mirror/home ]]; then
+    log "files:"
+    while IFS= read -r rel; do
+      [[ -n $rel ]] || continue
+      log "  ${rel#"$mirror/home"/}"
+    done < <(/usr/bin/find "$mirror/home" -mindepth 1 -maxdepth 2 -print)
+  fi
+  if [[ -f $mirror/packages/pacman.txt ]]; then
+    log "official packages listed: $(grep -cve '^$' "$mirror/packages/pacman.txt" || true)"
+  fi
+  if [[ -f $mirror/packages/flatpak.txt ]]; then
+    log "flatpaks:"
+    while IFS=$'\t' read -r app _; do
+      [[ -n $app ]] || continue
+      log "  ${app}"
+    done <"$mirror/packages/flatpak.txt"
+  fi
+  if [[ -f $mirror/plugins.json ]]; then
+    log "plugins:"
+    jq -r '.[] | "  \(.id) \(if .local then "(local snapshot)" else .commit end)"' "$mirror/plugins.json" || true
+  fi
+  local bundle
+  for bundle in "$mirror/flatpaks"/*.flatpak; do
+    [[ -f $bundle ]] || continue
+    log "bundle $(basename "$bundle")"
+  done
+  local hook
+  for hook in $(list_hooks "$mirror"); do
+    log "hook ${hook}"
+  done
+  if (( with_exec != 1 )); then
+    log "plugins, bundles, and hooks will not run"
+  fi
+}
+
+# Interactive prompts return 0 for yes. Non-interactive uses the default:
+# 0 continues, 1 refuses.
+prompt_yes() {
+  local prompt="$1"
+  local default_rc="$2"
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    return "$default_rc"
+  fi
+  printf '%s [y/N] ' "$prompt" >&2
+  local answer=""
+  if ! IFS= read -r answer; then
+    return 1
+  fi
+  [[ $answer == y || $answer == Y ]]
 }

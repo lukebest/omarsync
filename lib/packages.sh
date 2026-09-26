@@ -35,7 +35,49 @@ export_flatpaks() {
     [[ $commit =~ ^[0-9a-f]{64}$ ]] || commit=""
     url=${remote_urls[$origin]:-}
     printf '%s\t%s\t%s\t%s\t%s\n' "$app" "$origin" "$branch" "$commit" "$url" >>"$out"
+    if [[ -z $url && -n $commit ]]; then
+      bundle_local_flatpak "$dest" "$app" "$branch" || warn "could not bundle flatpak ${app}; apply will skip it without a remote URL"
+    fi
   done < <(flatpak list --user --app --columns=application,origin,branch,active 2>/dev/null || true)
+}
+
+bundle_local_flatpak() {
+  local dest="$1"
+  local app="$2"
+  local branch="$3"
+  [[ -n ${OSTREE_BIN:-} && -n ${FLATPAK_BIN:-} ]] || return 1
+  local repo="$HOME/.local/share/flatpak/repo"
+  [[ -d $repo ]] || return 1
+  local tmp ref
+  tmp=$(/usr/bin/mktemp -d)
+  ostree --repo="$tmp/repo" init --mode=archive || { rm -rf "$tmp"; return 1; }
+  ref=""
+  local candidate
+  for candidate in \
+    "app/${app}/x86_64/${branch}" \
+    "app/${app}/aarch64/${branch}"; do
+    if ostree --repo="$repo" rev-parse "$candidate" >/dev/null 2>&1; then
+      ref=$candidate
+      break
+    fi
+  done
+  if [[ -z $ref ]]; then
+    ref=$(ostree --repo="$repo" refs 2>/dev/null | grep -F "app/${app}/" | head -n 1 || true)
+  fi
+  [[ -n $ref ]] || { rm -rf "$tmp"; return 1; }
+  ostree --repo="$tmp/repo" pull-local "$repo" "$ref" || { rm -rf "$tmp"; return 1; }
+  mkdir -p "$dest/flatpaks"
+  local out="$dest/flatpaks/${app}.flatpak"
+  flatpak build-bundle "$tmp/repo" "$out" "$app" "$branch" || { rm -rf "$tmp"; rm -f "$out"; return 1; }
+  rm -rf "$tmp"
+  local size
+  size=$(/usr/bin/stat -c '%s' "$out")
+  if (( size > 50 * 1024 * 1024 )); then
+    rm -f "$out"
+    warn "flatpak bundle ${app} is over 50MB; skipped"
+    return 1
+  fi
+  log "bundled flatpak ${app}"
 }
 
 flatpak_remote_url_ok() {
@@ -136,15 +178,25 @@ install_missing_flatpaks() {
     installed=0
     flatpak info --user "$app" >/dev/null 2>&1 && installed=1
     if (( ! installed )); then
-      if ! ensure_user_flatpak_remote "$origin" "$url"; then
-        warn "skipping flatpak ${app}; remote ${origin} is not on this machine and has no download URL"
-        continue
-      fi
-      log "installing flatpak ${app} from ${origin}"
-      if ! flatpak install --user --noninteractive --app "$origin" "$app"; then
-        warn "failed to install flatpak ${app}"
-        failed=1
-        continue
+      local bundle="$mirror/flatpaks/${app}.flatpak"
+      if [[ -z $url && -f $bundle ]]; then
+        log "installing flatpak ${app} from bundled snapshot"
+        if ! flatpak install --user --noninteractive --bundle "$bundle"; then
+          warn "failed to install bundled flatpak ${app}"
+          failed=1
+          continue
+        fi
+      else
+        if ! ensure_user_flatpak_remote "$origin" "$url"; then
+          warn "skipping flatpak ${app}; remote ${origin} is not on this machine and has no download URL"
+          continue
+        fi
+        log "installing flatpak ${app} from ${origin}"
+        if ! flatpak install --user --noninteractive --app "$origin" "$app"; then
+          warn "failed to install flatpak ${app}"
+          failed=1
+          continue
+        fi
       fi
     fi
     if [[ -n $commit ]]; then

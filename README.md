@@ -8,9 +8,10 @@ Omarsync records:
 - `~/.config/hypr`
 - terminal, Neovim, btop, and lazygit config when those directories exist
 - the current theme name and wallpaper
-- explicitly installed official and AUR packages, and user-installed Flatpak apps (such as a Flathub Zotero) pinned to the commit that was installed
-- a list of third-party shell plugins (id, remote, and commit when the checkout has one). The plugin source itself is not copied or installed
-- application launchers in `~/.local/share/applications` and their icons in `~/.local/share/icons/hicolor` (web apps and other Omarchy-installed apps)
+- explicitly installed official and AUR packages, and user-installed Flatpak apps pinned to the commit that was installed. An app from a remote with no URL is bundled when it is under 50MB
+- third-party shell plugins. A plugin with an https remote is recorded by commit and cloned at that commit. A plugin with no remote is copied into the snapshot. Omarsync itself is not copied
+- application launchers, autostart entries, Flatpak overrides, user systemd units, and commands in `~/.local/bin`
+- post-apply hooks from `~/.config/omarsync-hooks/post-apply.d`
 
 The data repository defaults to a **private** `<github-user>/omarchy-config`. Files over 50MB and any `.git` directory are skipped.
 
@@ -28,19 +29,18 @@ omarchy pkg add github-cli
 
 ## First sync
 
-1. Click the cloud icon and choose **Sign in to GitHub**. That runs `gh auth login` in a terminal.
-2. Choose **Set up repository**. Omarsync creates `you/omarchy-config` if it does not exist and clones it to `~/.local/state/omarsync/repo`.
-3. Choose **Push**. The commit is signed. Push uses `~/.ssh/id_ed25519` when that key has no passphrase. Otherwise it creates `~/.config/omarsync/signing_key` and trusts that key on this machine. The private key stays local.
+1. Click the cloud icon and choose **Get started**. That installs GitHub CLI if it is missing, signs in, and creates the private repository.
+2. Choose **Push**. The commit is signed. Push uses `~/.ssh/id_ed25519` when that key has no passphrase. Otherwise it creates `~/.config/omarsync/signing_key` and trusts that key on this machine. The private key stays local.
 
-On the other machine, install the plugin, sign in with a GitHub account that can read the repository, and set up the repository. The first time, choose **Apply this commit**. That apply does not need a trusted key. If the commit is signed, the signing key is saved in `~/.config/omarsync/trusted-keys` on this PC. If it is not signed, this PC still applies that exact commit once. The trust file stays on the machine; it is not part of the synced snapshot.
+The bar updates as soon as those commands finish. A right-click scan is not required. Opening the panel does not scan.
 
-Later applies accept only a commit signed by a trusted key. **Force pull and apply** fetches that same commit and writes it anyway when the signature check would refuse it. Apply still refuses a branch name or a different commit id. You can pin the public key ahead of time:
+On the other machine, install the plugin and choose **Get started**, then **Apply**. Apply shows what will change and asks before it writes. A signed commit can install missing plugins, local Flatpak bundles, and hooks. An unsigned first apply, or **apply --force**, writes configuration and skips those executable steps. `--no-exec` skips them even for a signed commit.
 
 ```sh
 omarsync trust-key /path/to/the-signing-key.pub
 ```
 
-The panel shows the full commit id. **Apply signed commit** runs only for that exact signed snapshot.
+The panel shows a short commit id. **Apply** runs only for that exact snapshot, after showing the preview in a terminal.
 
 Before it overwrites anything, apply copies the current files to `~/.local/state/omarsync/backup/<timestamp>/` and keeps the last five backups.
 
@@ -57,11 +57,12 @@ Before it overwrites anything, apply copies the current files to `~/.local/state
 
 ```sh
 omarsync login
+omarsync setup
 omarsync init [owner/name]
 omarsync push
 omarsync trust-key <public-key> [private-key]
 omarsync pull
-omarsync apply --commit <40-character sha> [--no-packages] [--force]
+omarsync apply --commit <40-character sha> [--no-packages] [--no-exec] [--force]
 omarsync status
 omarsync doctor
 ```
@@ -76,11 +77,17 @@ Which files are uploaded is decided only by `~/.config/omarsync/scope` on this m
 .config/omarchy | plugins/,*.bak.*,*.mp4,*.mkv,*.webm,*.mov,*.avi,*.m4v
 .config/hypr | *.bak.*
 .config/nvim
+.config/btop
+.config/lazygit
+.config/autostart
+.local/bin | agent,cursor,cursor-agent
 .local/share/applications | mimeinfo.cache
 .local/share/icons/hicolor | icon-theme.cache
 ```
 
-Paths are relative to `$HOME`. Text after `|` is a comma-separated list of rsync exclude patterns. A missing path is skipped. Paths that would include `.ssh`, `.config/gh`, `.config/git`, `.gnupg`, key files, or the local omarsync trust directory are rejected.
+Paths are relative to `$HOME`. Text after `|` is a comma-separated list of rsync exclude patterns. A missing path is skipped. Paths that would include `.ssh`, `.config/gh`, `.config/git`, `.gnupg`, `.config/doubao-murmur`, `.var`, key files, or the local omarsync trust directory are rejected.
+
+Hooks are not scope entries. Put executable scripts in `~/.config/omarsync-hooks/post-apply.d/`. Apply copies them into the snapshot and, for a trusted commit, runs them in the terminal after the files are written. `examples/hooks/10-murmur.sh` re-applies Doubao Murmur patches and, if F9 cannot read the input device, installs a udev rule with sudo. Session cookies under `~/.config/doubao-murmur` are not synced.
 
 ## Apply behavior
 
@@ -89,7 +96,7 @@ Paths are relative to `$HOME`. Text after `|` is a comma-separated list of rsync
 - Apply does not remove `~/.config/omarchy/plugins`. Snapshots omit that directory, so replacing `.config/omarchy` would otherwise delete omarsync and the other installed plugins.
 - Apply resolves the remote branch once, checks out that full commit detached, and checks the signature against `~/.config/omarsync/trusted-keys` before it changes anything. The command has to name that same 40-character id. The first apply on a PC with no trusted key can use that commit even when it is unsigned, and pins the signer when the commit is signed. Later applies require a trusted signature. `--force` applies that exact commit anyway and does not add the signing key to the trust file.
 - Official packages from that signed snapshot are installed with `omarchy pkg add`, which uses the signed Arch repositories. User Flatpak apps are installed from the recorded remote and then moved to the recorded commit. A missing Flathub user remote is added from Flathub. An app whose remote has no download URL, such as a disabled local origin, is skipped. AUR names are only printed. Omarsync does not run `yay`.
-- Plugin ids are recorded in `plugins.json`. Omarsync does not copy plugin trees out of the snapshot and does not run `omarchy plugin add` or `omarchy plugin enable`.
+- Missing plugins from that signed snapshot are installed. An https plugin is cloned and checked out at the recorded commit. A plugin with no remote is copied from the snapshot. Each one is validated before it is moved into `~/.config/omarchy/plugins`. Omarsync does not install its own tree. `--no-exec`, an unsigned first apply, and `--force` skip this.
 - The last signed push wins when both sides edited the same file.
 
 ## Permissions

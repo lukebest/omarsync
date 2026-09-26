@@ -200,7 +200,14 @@ BarWidget {
   }
 
   function setup() {
-    root.runInTerminal(root.quotedCli() + " init")
+    root.runInTerminal(root.quotedCli() + " setup")
+  }
+
+  function viewLog() {
+    var home = Quickshell.env("HOME") || ""
+    if (!root.bar || typeof root.bar.run !== "function" || home === "")
+      return
+    root.bar.run("omarchy-launch-editor " + Model.shellQuote(home + "/.local/state/omarsync/last.log"))
   }
 
   function pullAndApply() {
@@ -208,13 +215,6 @@ BarWidget {
     if (sha === "")
       return
     root.runInTerminal(root.quotedCli() + " apply --commit " + sha)
-  }
-
-  function forcePullAndApply() {
-    var sha = Model.fullCommit(root.status.remoteCommit)
-    if (sha === "")
-      return
-    root.runInTerminal(root.quotedCli() + " apply --commit " + sha + " --force")
   }
 
   function openRepo() {
@@ -303,19 +303,18 @@ BarWidget {
       onStreamFinished: root.applyStatus(text)
     }
     stderr: StdioCollector {
+      id: statusErr
       waitForEnd: true
       onDataChanged: {
         if (text.length > root.outputLimit)
           root.expireProcess(statusProcess, "status output exceeded the limit")
       }
-      onStreamFinished: {
-        var message = root.boundedText(text).trim()
-        if (message !== "" && !root.statusAborted)
-          root.statusError = message
-      }
     }
     onExited: function(exitCode, exitStatus) {
       statusDeadline.stop()
+      var message = root.boundedText(statusErr.text).trim()
+      if (exitCode !== 0 && message !== "" && !root.statusAborted)
+        root.statusError = message
     }
   }
 
@@ -331,19 +330,18 @@ BarWidget {
       }
     }
     stderr: StdioCollector {
+      id: pushErr
       waitForEnd: true
       onDataChanged: {
         if (text.length > root.outputLimit)
           root.expireProcess(pushProcess, "push output exceeded the limit")
       }
-      onStreamFinished: {
-        var message = root.boundedText(text).trim()
-        if (message !== "")
-          root.statusError = message
-      }
     }
     onExited: function(exitCode, exitStatus) {
       pushDeadline.stop()
+      var message = root.boundedText(pushErr.text).trim()
+      if (exitCode !== 0 && message !== "")
+        root.statusError = message
       root.refreshStatus()
     }
   }
@@ -355,11 +353,24 @@ BarWidget {
       pushProcess.signal(9)
   }
 
+  readonly property string statusPath: (Quickshell.env("HOME") || "") + "/.local/state/omarsync/status.json"
+
   FileView {
     path: root.manifestPath
     watchChanges: true
     printErrors: false
     onLoaded: root.version = Model.pluginVersion(text())
+    onFileChanged: reload()
+  }
+
+  FileView {
+    path: root.statusPath
+    watchChanges: true
+    printErrors: false
+    onLoaded: {
+      if (String(text()).trim() !== "")
+        root.applyStatus(text())
+    }
     onFileChanged: reload()
   }
 
@@ -381,9 +392,18 @@ BarWidget {
     text: "\uf0c2"
     dimmed: root.status.loggedIn !== true
     active: root.dirty || (root.status.behind || 0) > 0
-    tooltipText: root.busy
-      ? "Omarsync is working"
-      : (root.version !== "" ? ("Omarsync " + root.version) : "Omarsync")
+    tooltipText: {
+      var line = root.version !== "" ? ("Omarsync " + root.version) : "Omarsync"
+      if (root.busy)
+        return line + " · working"
+      var sentence = Model.statusSentence(root.status)
+      var when = root.status.lastPush && root.status.lastPush.time
+        ? Model.relativeTime(root.status.lastPush.time)
+        : ""
+      if (when !== "")
+        return line + " · " + sentence + " · last push " + when
+      return line + " · " + sentence
+    }
 
     RotationAnimation on textRotation {
       from: 0

@@ -151,6 +151,7 @@ collect_into() {
   export_current "$dest"
   export_packages "$dest"
   export_plugins "$dest"
+  export_hooks "$dest"
 }
 
 scope_dirty() {

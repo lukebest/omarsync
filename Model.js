@@ -48,6 +48,25 @@ function pluginVersion(manifestText) {
   return ""
 }
 
+function shortCommit(value) {
+  var sha = fullCommit(value)
+  return sha === "" ? "" : sha.substring(0, 7)
+}
+
+function statusSentence(sync) {
+  if (!sync || sync.initialized !== true)
+    return "Repository is not set up"
+  if (sync.dirty === true && (sync.behind || 0) > 0)
+    return "Local changes to push, and " + sync.behind + " to apply"
+  if (sync.dirty === true)
+    return "Local changes to push"
+  if ((sync.behind || 0) > 0)
+    return sync.behind + (sync.behind === 1 ? " commit to apply" : " commits to apply")
+  if ((sync.ahead || 0) > 0)
+    return sync.ahead + (sync.ahead === 1 ? " commit not on the remote yet" : " commits not on the remote yet")
+  return "Up to date"
+}
+
 function relativeTime(iso) {
   if (!iso)
     return "never"

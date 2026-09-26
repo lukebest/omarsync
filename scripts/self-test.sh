@@ -107,10 +107,27 @@ if run "$TMP/home1" apply --no-packages >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$MIRROR/plugins-local/evil"
+mkdir -p "$MIRROR/plugins-local/evil" "$MIRROR/plugins-local/test.widget" "$MIRROR/hooks/post-apply.d"
 printf 'echo pwned\n' >"$MIRROR/plugins-local/evil/payload.sh"
 chmod +x "$MIRROR/plugins-local/evil/payload.sh"
-git -C "$MIRROR" add plugins-local
+cat >"$MIRROR/plugins-local/test.widget/manifest.json" <<'EOF'
+{
+  "schemaVersion": 1,
+  "id": "test.widget",
+  "name": "Test",
+  "version": "1",
+  "kinds": ["overlay"],
+  "entryPoints": { "overlay": "Widget.qml" }
+}
+EOF
+printf 'import QtQuick\n' >"$MIRROR/plugins-local/test.widget/Widget.qml"
+cat >"$MIRROR/hooks/post-apply.d/10-mark.sh" <<'EOF'
+#!/bin/bash
+touch "$HOME/hook-ran"
+EOF
+chmod +x "$MIRROR/hooks/post-apply.d/10-mark.sh"
+jq -n '[{id:"test.widget",url:"",commit:"",enabled:true,local:true}]' >"$MIRROR/plugins.json"
+git -C "$MIRROR" add plugins-local hooks plugins.json
 git -C "$MIRROR" commit -S -m "plant an executable plugin tree" >/dev/null
 git -C "$MIRROR" push --quiet origin HEAD:main
 
@@ -129,8 +146,11 @@ mkdir -p "$TMP/home2/.config/omarchy/plugins/io.github.lukebest.omarsync"
 printf 'stay\n' >"$TMP/home2/.config/omarchy/plugins/io.github.lukebest.omarsync/keep"
 run "$TMP/home2" apply --commit "$sha" --no-packages
 [[ ! -e $TMP/home2/.config/omarchy/plugins/evil ]]
+[[ -f $TMP/home2/.config/omarchy/plugins/test.widget/Widget.qml ]]
+[[ -f $TMP/home2/hook-ran ]]
 grep -q '^stay$' "$TMP/home2/.config/omarchy/plugins/io.github.lukebest.omarsync/keep"
 [[ -f $TMP/home2/.config/omarchy/plugins/secret/x ]]
+[[ -f $TMP/home1/.local/state/omarsync/status.json ]]
 
 # A new machine has no trusted key. The first apply runs directly and pins the signer.
 setup_home "$TMP/home3"
@@ -148,6 +168,47 @@ grep -q 'namespaces="git"' "$TMP/home3/.config/omarsync/trusted-keys"
 [[ $(run "$TMP/home3" status --json | jq -r '.firstApply') == false ]]
 run "$TMP/home3" apply --commit "$sha" --no-packages
 [[ ! -f $TMP/yay.log ]]
+
+plug=$TMP/plugsrc
+mkdir -p "$plug"
+git -C "$plug" init -q -b main
+cat >"$plug/manifest.json" <<'EOF'
+{
+  "schemaVersion": 1,
+  "id": "test.remote",
+  "name": "Remote",
+  "version": "1",
+  "kinds": ["overlay"],
+  "entryPoints": { "overlay": "Widget.qml" }
+}
+EOF
+printf 'import QtQuick\n' >"$plug/Widget.qml"
+git -C "$plug" config user.email test@example.com
+git -C "$plug" config user.name test
+git -C "$plug" add -A
+git -C "$plug" commit -q -m plugin
+good=$(git -C "$plug" rev-parse HEAD)
+git clone -q --bare "$plug" "$TMP/plug.git"
+jq -n --arg url "file://$TMP/plug.git" --arg rev "$good" \
+  '[{id:"test.remote",url:$url,commit:$rev,enabled:false,local:false}]' >"$MIRROR/plugins.json"
+git -C "$MIRROR" add plugins.json
+git -C "$MIRROR" commit -S -m "pin a plugin commit" >/dev/null
+git -C "$MIRROR" push --quiet origin HEAD:main
+remote_sha=$(git -C "$MIRROR" rev-parse HEAD)
+run "$TMP/home2" apply --commit "$remote_sha" --no-packages
+[[ -f $TMP/home2/.config/omarchy/plugins/test.remote/Widget.qml ]]
+rm -rf "$TMP/home2/.config/omarchy/plugins/test.remote"
+jq -n --arg url "file://$TMP/plug.git" \
+  '[{id:"test.remote",url:$url,commit:"0123456789abcdef0123456789abcdef01234567",enabled:false,local:false}]' >"$MIRROR/plugins.json"
+git -C "$MIRROR" add plugins.json
+git -C "$MIRROR" commit -S -m "pin a missing plugin commit" >/dev/null
+git -C "$MIRROR" push --quiet origin HEAD:main
+bad_sha=$(git -C "$MIRROR" rev-parse HEAD)
+if run "$TMP/home2" apply --commit "$bad_sha" --no-packages >/dev/null 2>&1; then
+  echo "a plugin commit mismatch should fail" >&2
+  exit 1
+fi
+[[ ! -e $TMP/home2/.config/omarchy/plugins/test.remote ]]
 
 grep -q '"changed": true' "$TMP/home2/.config/omarchy/shell.json"
 grep -q 'local only' "$TMP/home2/.local/state/omarsync/backup"/*/home/.config/omarchy/shell.json
@@ -239,8 +300,10 @@ plant_unsigned() {
   fi
   git -C "$work" config user.email test@example.com
   git -C "$work" config user.name test
-  mkdir -p "$work/home/.config/omarchy"
+  mkdir -p "$work/home/.config/omarchy" "$work/hooks/post-apply.d"
   printf '%s\n' "$content" >"$work/home/.config/omarchy/shell.json"
+  printf '%s\n' '#!/bin/bash' 'touch "$HOME/hook-ran"' >"$work/hooks/post-apply.d/10-mark.sh"
+  chmod +x "$work/hooks/post-apply.d/10-mark.sh"
   git -C "$work" add -A
   git -C "$work" -c commit.gpgsign=false commit -q -m "$message"
   git -C "$work" push -q origin HEAD:main
@@ -253,6 +316,7 @@ unsigned_status=$(ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" status --json)
 [[ $(jq -r '.remoteSignature' <<<"$unsigned_status") == none ]]
 [[ $(jq -r '.firstApply' <<<"$unsigned_status") == true ]]
 ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" apply --commit "$unsigned_tip" --no-packages
+[[ ! -f $TMP/home5/hook-ran ]]
 plant_unsigned 'second' 'second unsigned snapshot'
 unsigned_tip2=$(git --git-dir="$UNSIGNED_ORIGIN" rev-parse refs/heads/main)
 if ORIGIN="$UNSIGNED_ORIGIN" run "$TMP/home5" apply --commit "$unsigned_tip2" --no-packages >/dev/null 2>&1; then
@@ -268,6 +332,11 @@ grep -q 'second' "$TMP/home5/.config/omarchy/shell.json"
 keys_before=$(cat "$TMP/home3/.config/omarsync/trusted-keys")
 run "$TMP/home3" apply --force --commit "$other" --no-packages
 [[ $(cat "$TMP/home3/.config/omarsync/trusted-keys") == "$keys_before" ]]
+
+if run "$TMP/home1" setup </dev/null >/dev/null 2>&1; then
+  echo "setup should fail without a terminal" >&2
+  exit 1
+fi
 
 if run "$TMP/home1" login </dev/null >/dev/null 2>&1; then
   echo "login should fail without a terminal when GitHub is signed out" >&2

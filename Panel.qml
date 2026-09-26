@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "Model.js" as Model
 
 Panel {
   id: root
@@ -46,22 +47,13 @@ Panel {
   function primaryLabel() {
     if (!root.hostWidget || root.hostWidget.statusReady !== true)
       return ""
-    if (root.sync.ghInstalled !== true)
-      return "Install GitHub CLI"
-    if (root.sync.loggedIn !== true)
-      return "Sign in to GitHub"
-    if (root.sync.initialized !== true)
-      return "Set up repository"
+    if (root.sync.ghInstalled !== true || root.sync.loggedIn !== true || root.sync.initialized !== true)
+      return "Get started"
     return ""
   }
 
   function runPrimary() {
-    if (sync.ghInstalled !== true)
-      root.callHost("installGh")
-    else if (sync.loggedIn !== true)
-      root.callHost("login")
-    else
-      root.callHost("setup")
+    root.callHost("setup")
   }
 
   function lastPushText() {
@@ -93,18 +85,31 @@ Panel {
   function changeText() {
     if (!root.hostWidget || root.hostWidget.statusReady !== true)
       return "Checking status…"
-    if (!root.sync.initialized)
-      return "Repository is not set up"
     if (root.working)
       return "Working…"
-    var parts = []
-    parts.push(sync.dirty === true ? "Local changes waiting" : "Local files match the last push")
-    if (sync.behind > 0)
-      parts.push(sync.behind + " commit" + (sync.behind === 1 ? "" : "s") + " to pull")
-    if (sync.ahead > 0)
-      parts.push(sync.ahead + " unpushed commit" + (sync.ahead === 1 ? "" : "s"))
-    return parts.join(" · ")
+    return Model.statusSentence(root.sync)
   }
+
+  function commitText() {
+    var sha = root.trustedCommit
+    if (sha === "")
+      return ""
+    var shortSha = sha.substring(0, 7)
+    var fp = root.sync.signerFingerprint ? (" " + root.sync.signerFingerprint) : ""
+    if (root.sync.remoteSigned === true)
+      return "Signed " + shortSha + fp
+    if (root.sync.firstApply === true && root.sync.remoteSignature === "untrusted")
+      return "Signed " + shortSha + fp
+    if (root.sync.firstApply === true)
+      return "First apply " + shortSha
+    if (root.sync.remoteSignature === "untrusted" && root.sync.hasTrustedKeys === true)
+      return "Different key " + shortSha + fp
+    if (root.sync.remoteSignature === "untrusted")
+      return "Signed " + shortSha + fp
+    return "Unsigned " + shortSha
+  }
+
+  property bool settingsOpen: false
 
   KeyboardPanel {
     id: panel
@@ -158,20 +163,7 @@ Panel {
         Text {
           width: parent.width
           visible: root.trustedCommit !== ""
-          text: {
-            var fp = root.sync.signerFingerprint ? (" " + root.sync.signerFingerprint) : ""
-            if (root.sync.remoteSigned === true)
-              return "Signed commit " + root.trustedCommit + fp
-            if (root.sync.firstApply === true && root.sync.remoteSignature === "untrusted")
-              return "Signed commit " + root.trustedCommit + fp
-            if (root.sync.firstApply === true)
-              return "First apply " + root.trustedCommit
-            if (root.sync.remoteSignature === "untrusted" && root.sync.hasTrustedKeys === true)
-              return "Signed by a different key" + fp
-            if (root.sync.remoteSignature === "untrusted")
-              return "Signed commit " + root.trustedCommit + fp
-            return "Unsigned commit " + root.trustedCommit
-          }
+          text: root.commitText()
           color: root.barForeground
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -212,7 +204,8 @@ Panel {
         Button {
           width: parent.width
           text: root.working ? "Working…" : "Push"
-          enabled: root.ready && !root.working
+          visible: root.ready && (root.sync.dirty === true || (root.sync.ahead || 0) > 0)
+          enabled: !root.working
           opacity: enabled ? 1 : 0.45
           leftAlign: true
           foreground: root.barForeground
@@ -222,24 +215,14 @@ Panel {
 
         Button {
           width: parent.width
-          text: (root.firstApply && root.sync.remoteSigned !== true) ? "Apply this commit" : "Apply signed commit"
-          enabled: root.canApply && !root.working
+          text: (root.firstApply && root.sync.remoteSigned !== true) ? "Apply this commit" : "Apply"
+          visible: root.canApply && ((root.sync.behind || 0) > 0 || root.firstApply || root.sync.remoteSigned !== true)
+          enabled: !root.working
           opacity: enabled ? 1 : 0.45
           leftAlign: true
           foreground: root.barForeground
           fontFamily: root.fontFamily
           onClicked: root.callHost("pullAndApply")
-        }
-
-        Button {
-          width: parent.width
-          text: "Force pull and apply"
-          enabled: root.ready && root.trustedCommit !== "" && !root.working
-          opacity: enabled ? 1 : 0.45
-          leftAlign: true
-          foreground: root.barForeground
-          fontFamily: root.fontFamily
-          onClicked: root.callHost("forcePullAndApply")
         }
 
         Button {
@@ -264,9 +247,39 @@ Panel {
           onClicked: root.callHost("editScope")
         }
 
+        Button {
+          width: parent.width
+          text: root.working ? "Scanning…" : "Scan now"
+          enabled: !root.working
+          opacity: enabled ? 1 : 0.45
+          leftAlign: true
+          foreground: root.barForeground
+          fontFamily: root.fontFamily
+          onClicked: root.callHost("refreshStatus")
+        }
+
+        Button {
+          width: parent.width
+          text: "View log"
+          leftAlign: true
+          foreground: root.barForeground
+          fontFamily: root.fontFamily
+          onClicked: root.callHost("viewLog")
+        }
+
+        Button {
+          width: parent.width
+          text: root.settingsOpen ? "Hide settings" : "Settings"
+          leftAlign: true
+          foreground: root.barForeground
+          fontFamily: root.fontFamily
+          onClicked: root.settingsOpen = !root.settingsOpen
+        }
+
         Dropdown {
           id: scanInterval
           width: parent.width
+          visible: root.settingsOpen
           label: "Scan for changes"
           foreground: root.barForeground
           fontFamily: root.fontFamily
@@ -285,19 +298,9 @@ Panel {
           }
         }
 
-        Button {
-          width: parent.width
-          text: root.working ? "Scanning…" : "Scan now"
-          enabled: !root.working
-          opacity: enabled ? 1 : 0.45
-          leftAlign: true
-          foreground: root.barForeground
-          fontFamily: root.fontFamily
-          onClicked: root.callHost("refreshStatus")
-        }
-
         Toggle {
           width: parent.width
+          visible: root.settingsOpen
           label: "Auto push"
           description: root.autoPushDescription()
           checked: root.hostWidget ? root.hostWidget.settingInt("autoPushIntervalMin", 0) > 0 : false
@@ -309,6 +312,7 @@ Panel {
 
         Toggle {
           width: parent.width
+          visible: root.settingsOpen
           label: "Notify"
           description: "Desktop notification after a push"
           checked: root.hostWidget ? root.hostWidget.settingBool("notify", true) : true

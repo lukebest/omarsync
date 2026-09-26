@@ -57,6 +57,8 @@ source "$ROOT/lib/trust.sh"
 source "$ROOT/lib/packages.sh"
 # shellcheck source=../lib/plugins.sh
 source "$ROOT/lib/plugins.sh"
+# shellcheck source=../lib/hooks.sh
+source "$ROOT/lib/hooks.sh"
 # shellcheck source=../lib/collect.sh
 source "$ROOT/lib/collect.sh"
 # shellcheck source=../lib/apply.sh
@@ -79,12 +81,16 @@ Commands:
                       Trust an SSH signing key. Push does this for its own key.
                       Pass a public key to trust another machine ahead of time.
   pull                Fetch once and detach the mirror at that exact commit
-  apply --commit <40-hex> [--no-packages] [--trust-signer] [--force]
+  apply --commit <40-hex> [--no-packages] [--no-exec] [--trust-signer] [--force]
                       Apply that commit. The SHA must be the one you reviewed.
+                      Shows a preview and asks before changing files in a terminal.
+                      Plugins, local Flatpak bundles, and hooks run only for a
+                      trusted signature, unless --no-exec or --force is set.
                       The first apply on a PC with no trusted key runs directly.
                       Later applies require a trusted signature.
                       --force applies that exact commit even when it is unsigned
-                      or signed by a key this PC does not trust.
+                      or signed by a key this PC does not trust, and skips executable restore.
+  setup               Install GitHub CLI if needed, sign in, and create the repository.
   sync [--quiet] [--notify]
                       push, then pull
   scope-path          Print the scope file inside the mirror
@@ -257,14 +263,43 @@ cmd_pull() {
   log "pinned ${sha}"
 }
 
+cmd_setup() {
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    die "setup needs a terminal. Run: omarsync setup"
+  fi
+  if ! gh_installed; then
+    log "installing GitHub CLI"
+    omarchy pkg add github-cli || die "could not install github-cli"
+    require_tools
+  fi
+  if ! gh_logged_in; then
+    cmd_login
+  fi
+  if ! mirror_ready; then
+    cmd_init
+  fi
+  local mirror branch sha
+  mirror=$(mirror_dir)
+  branch=$(configured_branch)
+  if sha=$(resolve_remote_sha "$mirror" "$branch" 2>/dev/null) && is_full_sha "$sha"; then
+    log "repository already has commit ${sha}"
+    log "open the panel and choose Apply"
+  else
+    log "repository is empty"
+    log "open the panel and choose Push"
+  fi
+}
+
 cmd_apply() {
   local with_packages=1
   local trust_signer=0
   local force=0
+  local no_exec=0
   local expected=""
   while (($#)); do
     case "$1" in
       --no-packages) with_packages=0 ;;
+      --no-exec) no_exec=1 ;;
       --trust-signer) trust_signer=1 ;;
       --force) force=1 ;;
       --commit)
@@ -294,23 +329,32 @@ cmd_apply() {
     if ! commit_is_trusted "$mirror" "$sha"; then
       if (( first )); then
         accept_first_apply "$mirror" "$sha"
+      elif prompt_yes "Commit ${sha} is not trusted. Apply anyway? Configuration only; plugins and hooks stay off." 1; then
+        force=1
+        warn "force apply of ${sha}; the signature check was skipped"
       else
         trust_signer_of_commit "$mirror" "$sha" "$trust_signer"
       fi
     fi
-    if ! commit_is_trusted "$mirror" "$sha" && (( ! first )); then
+    if ! commit_is_trusted "$mirror" "$sha" && (( ! first && ! force )); then
       require_trusted_commit "$mirror" "$sha"
     fi
   fi
   checkout_pinned_commit "$mirror" "$sha"
-  if (( force )); then
-    log "reviewed commit ${sha} without a signature check"
+  local with_exec=0
+  if (( force || no_exec )); then
+    log "plugins, local bundles, and hooks will be skipped"
   elif commit_is_trusted "$mirror" "$sha"; then
+    with_exec=1
     log "reviewed signed commit ${sha}"
   else
-    log "reviewed first commit ${sha}"
+    log "reviewed first commit ${sha}; plugins and hooks stay off until it is signed"
   fi
-  if apply_mirror "$mirror" "$with_packages" "$sha"; then
+  preview_apply "$mirror" "$sha" "$with_exec"
+  if ! prompt_yes "Apply this snapshot?" 0; then
+    die "left the snapshot unapplied"
+  fi
+  if apply_mirror "$mirror" "$with_packages" "$sha" "$with_exec"; then
     mark_applied "$sha"
     log "applied ${sha}"
   else
@@ -322,6 +366,12 @@ cmd_apply() {
 cmd_scope_path() {
   ensure_local_scope
   printf '%s\n' "$(local_scope_file)"
+}
+
+status_trap() {
+  [[ ${OMARSYNC_STATUS_WRITTEN:-0} == 1 ]] && return 0
+  OMARSYNC_STATUS_WRITTEN=1
+  cmd_status --json >/dev/null || true
 }
 
 read_counts() {
@@ -434,7 +484,9 @@ cmd_status() {
   fi
 
   if (( as_json )); then
-    jq -n \
+    OMARSYNC_STATUS_WRITTEN=1
+    local json
+    json=$(jq -n \
       --argjson ghInstalled "$(json_bool "$gh_ok")" \
       --argjson loggedIn "$(json_bool "$logged_in")" \
       --arg user "$user" \
@@ -476,7 +528,10 @@ cmd_status() {
         lastPush: {host: $lastHost, time: $lastTime, omarchyVersion: $lastVersion},
         running: $running,
         error: $error
-      }'
+      }')
+    mkdir -p "$(state_dir)"
+    printf '%s\n' "$json" >"$(state_dir)/status.json"
+    printf '%s\n' "$json"
     return 0
   fi
 
@@ -516,6 +571,7 @@ main() {
     login) cmd_login "$@" ;;
     trust-key) cmd_trust_key "$@" ;;
     init) cmd_init "$@" ;;
+    setup) cmd_setup "$@" ;;
     push)
       NOTIFY=1
       while (($#)); do
@@ -551,4 +607,5 @@ main() {
 }
 
 require_tools
+trap 'status_trap' EXIT
 main "$@"

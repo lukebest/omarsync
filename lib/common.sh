@@ -16,6 +16,12 @@ log() {
 
 warn() {
   printf 'omarsync: %s\n' "$*" >&2
+  local logf stamp
+  logf="${HOME:-}/.local/state/omarsync/last.log"
+  [[ -n ${HOME:-} ]] || return 0
+  mkdir -p "$(dirname "$logf")" 2>/dev/null || return 0
+  stamp=$(/usr/bin/date -Iseconds 2>/dev/null || printf 'unknown')
+  printf '%s omarsync: %s\n' "$stamp" "$*" >>"$logf" || true
 }
 
 die() {
@@ -83,6 +89,8 @@ OMARCHY_SHELL_BIN=""
 OMARCHY_NOTIFY_BIN=""
 HYPRCTL_BIN=""
 FLATPAK_BIN=""
+OSTREE_BIN=""
+SYSTEMCTL_BIN=""
 DATE_BIN=""
 HOSTNAME_BIN=""
 
@@ -166,6 +174,16 @@ flatpak() {
   run_restricted "$FLATPAK_BIN" "$@"
 }
 
+ostree() {
+  [[ -n $OSTREE_BIN ]] || die "ostree is not installed in a trusted directory"
+  run_restricted "$OSTREE_BIN" "$@"
+}
+
+systemctl() {
+  [[ -n $SYSTEMCTL_BIN ]] || return 1
+  run_restricted "$SYSTEMCTL_BIN" "$@"
+}
+
 require_tools() {
   local missing=()
   GIT_BIN=$(resolve_tool git) || missing+=(git)
@@ -181,6 +199,8 @@ require_tools() {
   OMARCHY_NOTIFY_BIN=$(resolve_tool omarchy-notification-send || true)
   HYPRCTL_BIN=$(resolve_tool hyprctl || true)
   FLATPAK_BIN=$(resolve_tool flatpak || true)
+  OSTREE_BIN=$(resolve_tool ostree || true)
+  SYSTEMCTL_BIN=$(resolve_tool systemctl || true)
   (( ${#missing[@]} == 0 )) || die "missing trusted tools: ${missing[*]}"
 }
 
@@ -258,6 +278,8 @@ assert_safe_rel() {
     .password-store
     .local/share/keyrings
     .local/state/omarsync
+    .config/doubao-murmur
+    .var
   )
   [[ -n $rel && $rel != "." && $rel != ".." ]] || die "invalid scope path: '${rel}'"
   [[ $rel != /* ]] || die "scope path must be relative to \$HOME: '${rel}'"
