@@ -257,17 +257,12 @@ preview_apply() {
     log "plugins:"
     jq -r '.[] | "  \(.id) \(if .local then "(local snapshot)" else .commit end)"' "$mirror/plugins.json" || true
   fi
-  local bundle
-  for bundle in "$mirror/flatpaks"/*.flatpak; do
-    [[ -f $bundle ]] || continue
-    log "bundle $(basename "$bundle")"
-  done
   local hook
   for hook in $(list_hooks "$mirror"); do
     log "hook ${hook}"
   done
   if (( with_exec != 1 )); then
-    log "plugins, bundles, and hooks will not run"
+    log "plugins and hooks will not run"
   fi
 }
 

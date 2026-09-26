@@ -84,7 +84,7 @@ Commands:
   apply --commit <40-hex> [--no-packages] [--no-exec] [--trust-signer] [--force]
                       Apply that commit. The SHA must be the one you reviewed.
                       Shows a preview and asks before changing files in a terminal.
-                      Plugins, local Flatpak bundles, and hooks run only for a
+                      Plugins and hooks run only for a
                       trusted signature, unless --no-exec or --force is set.
                       The first apply on a PC with no trusted key runs directly.
                       Later applies require a trusted signature.
@@ -343,7 +343,7 @@ cmd_apply() {
   checkout_pinned_commit "$mirror" "$sha"
   local with_exec=0
   if (( force || no_exec )); then
-    log "plugins, local bundles, and hooks will be skipped"
+    log "plugins and hooks will be skipped"
   elif commit_is_trusted "$mirror" "$sha"; then
     with_exec=1
     log "reviewed signed commit ${sha}"

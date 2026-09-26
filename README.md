@@ -8,7 +8,7 @@ Omarsync records:
 - `~/.config/hypr`
 - terminal, Neovim, btop, and lazygit config when those directories exist
 - the current theme name and wallpaper
-- explicitly installed official and AUR packages, and user-installed Flatpak apps pinned to the commit that was installed. An app from a remote with no URL is bundled when it is under 50MB
+- explicitly installed official and AUR packages, and user-installed Flatpak apps pinned to the commit that was installed. An app whose remote has no download URL is recorded and skipped
 - third-party shell plugins. A plugin with an https remote is recorded by commit and cloned at that commit. A plugin with no remote is copied into the snapshot. Omarsync itself is not copied
 - application launchers, autostart entries, Flatpak overrides, user systemd units, and commands in `~/.local/bin`
 - post-apply hooks from `~/.config/omarsync-hooks/post-apply.d`
@@ -34,7 +34,7 @@ omarchy pkg add github-cli
 
 The bar updates as soon as those commands finish. A right-click scan is not required. Opening the panel does not scan.
 
-On the other machine, install the plugin and choose **Get started**, then **Apply**. Apply shows what will change and asks before it writes. A signed commit can install missing plugins, local Flatpak bundles, and hooks. An unsigned first apply, or **apply --force**, writes configuration and skips those executable steps. `--no-exec` skips them even for a signed commit.
+On the other machine, install the plugin and choose **Get started**, then **Apply**. Apply shows what will change and asks before it writes. A signed commit can install missing plugins and run hooks. An unsigned first apply, or **apply --force**, writes configuration and skips those executable steps. `--no-exec` skips them even for a signed commit.
 
 ```sh
 omarsync trust-key /path/to/the-signing-key.pub
