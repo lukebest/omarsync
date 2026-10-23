@@ -6904,7 +6904,85 @@ function executeLogin() {
   log.info(`已登录 ${githubUser() ?? "?"}`);
 }
 
-function executeMigrate() {
+function treePaths(mirror, rev) {
+  const listed = gitCapture(["-C", mirror, "ls-tree", "-r", "--name-only", rev]);
+  if (!listed.ok) {
+    return void 0;
+  }
+  return listed.out.split("\n").filter((line) => line !== "");
+}
+function withoutHome(pathsInTree) {
+  return pathsInTree.filter((name) => name !== "home" && !name.startsWith("home/")).sort();
+}
+function samePaths(left, right) {
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+function worktreeClean(mirror) {
+  const status = gitCapture(["-C", mirror, "status", "--porcelain", "--untracked-files=all"]);
+  return status.ok && status.out.trim() === "";
+}
+function onlyHomeRemoved(mirror, before, after) {
+  const diff = gitCapture(["-C", mirror, "diff", "--name-only", "--no-renames", before, after]);
+  if (!diff.ok) {
+    return false;
+  }
+  const names = diff.out.split("\n").filter((line) => line !== "");
+  return names.length > 0 && names.every((name) => name === "home" || name.startsWith("home/"));
+}
+async function dropLegacyHome(mirror, branch) {
+  if (!isDir(`${mirror}/home`)) {
+    return;
+  }
+  const head = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", "HEAD"]);
+  if (!isFullSha(head)) {
+    die("镜像没有完整提交,拒绝签名也未推送");
+  }
+  requireTrustedRemoteTip(mirror, head);
+  if (!worktreeClean(mirror)) {
+    die("镜像有未提交的改动,拒绝在迁移时签名");
+  }
+  const before = treePaths(mirror, head);
+  if (!before) {
+    die("读不到当前树,未签名也未推送");
+  }
+  const kept = withoutHome(before);
+  log.info(`可信提交 ${head}。删除 home/ 之后会留下这些文件:`);
+  if (kept.length === 0) {
+    log.info("  (没有其他文件)");
+  } else {
+    for (const name of kept) {
+      log.info(`  ${name}`);
+    }
+  }
+  if (!await confirm("签名并发布去掉 home/ 之后的这棵树?")) {
+    die("已取消,未签名也未推送");
+  }
+  const again = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", "HEAD"]);
+  const againPaths = isFullSha(again) ? treePaths(mirror, again) : void 0;
+  if (again !== head || !commitIsTrusted(mirror, head) || !againPaths || !samePaths(withoutHome(againPaths), kept) || !worktreeClean(mirror)) {
+    die("审阅期间树变了,未签名也未推送");
+  }
+  if (!git(["-C", mirror, "rm", "-rq", "home"])) {
+    git(["-C", mirror, "reset", "--hard", head]);
+    die("移除 home/ 失败,未签名也未推送");
+  }
+  if (!git(["-C", mirror, "commit", "-S", "-m", "drop file mirror; dotfiles moved to mise history"])) {
+    git(["-C", mirror, "reset", "--hard", head]);
+    die("迁移提交签名失败,未推送");
+  }
+  const signed = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", "HEAD"]);
+  const parent = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", "HEAD^"]);
+  const after = isFullSha(signed) ? treePaths(mirror, signed) : void 0;
+  if (parent !== head || !isFullSha(signed) || !commitIsTrusted(mirror, signed) || !after || !samePaths([...after].sort(), kept) || !onlyHomeRemoved(mirror, head, signed)) {
+    git(["-C", mirror, "reset", "--hard", head]);
+    die("签名没有覆盖已审阅的迁移,未推送");
+  }
+  if (!git(["-C", mirror, "push", "--quiet", "-u", "origin", `HEAD:${branch}`])) {
+    die("git push 失败,迁移提交未发布");
+  }
+  log.info("已移除旧文件镜像(仍可从 git 历史找回)");
+}
+async function executeMigrate() {
   if (!isDir(`${paths.mirrorDir}/.git`)) {
     die("未初始化。运行: omarsync init");
   }
@@ -6924,12 +7002,7 @@ function executeMigrate() {
   } else {
     log.warn("mise dot origin 未连接;dotfiles 未迁移");
   }
-  if (isDir(`${mirror}/home`)) {
-    git(["-C", mirror, "rm", "-rq", "home"]);
-    git(["-C", mirror, "commit", "-S", "-m", "drop file mirror; dotfiles moved to mise history"]);
-    git(["-C", mirror, "push", "--quiet", "-u", "origin", `HEAD:${branch}`]);
-    log.info("已移除旧文件镜像(仍可从 git 历史找回)");
-  }
+  await dropLegacyHome(mirror, branch);
   log.info(`迁移完成;旧备份在 ${paths.backupDir},可手动删除`);
 }
 
@@ -6943,6 +7016,7 @@ function executePull() {
   const mirror = requireMirror$1();
   const branch = configGet("BRANCH", readTextFile) ?? "main";
   const sha = resolveRemoteSha(mirror, branch);
+  requireTrustedRemoteTip(mirror, sha);
   checkoutPinnedCommit(mirror, sha);
   if (available()) {
     sync(true);
@@ -7448,7 +7522,7 @@ cli.addCommand({
 });
 cli.addCommand({
   name: "pull",
-  description: "只抓取远程快照并钉住 commit,不写任何活文件(下一步用 apply 审阅)",
+  description: "只抓取远程快照;可信签名的提交才钉住,不写任何活文件(下一步用 apply 审阅)",
   execute: () => {
     executePull();
   }
@@ -7505,9 +7579,9 @@ cli.addCommand({
 });
 cli.addCommand({
   name: "migrate",
-  description: "老格式迁移:home/ 镜像目录搬到 mise dot 历史",
-  execute: () => {
-    executeMigrate();
+  description: "老格式迁移:当前提交须已可信签名,确认剩余文件后才删除 home/ 并签名推送",
+  execute: async () => {
+    await executeMigrate();
   }
 });
 cli.addCommand({

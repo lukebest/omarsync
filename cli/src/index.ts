@@ -50,7 +50,7 @@ cli.addCommand({
 
 cli.addCommand({
     name: "pull",
-    description: "只抓取远程快照并钉住 commit,不写任何活文件(下一步用 apply 审阅)",
+    description: "只抓取远程快照;可信签名的提交才钉住,不写任何活文件(下一步用 apply 审阅)",
     execute: () => {
         executePull();
     },
@@ -114,9 +114,9 @@ cli.addCommand({
 
 cli.addCommand({
     name: "migrate",
-    description: "老格式迁移:home/ 镜像目录搬到 mise dot 历史",
-    execute: () => {
-        executeMigrate();
+    description: "老格式迁移:当前提交须已可信签名,确认剩余文件后才删除 home/ 并签名推送",
+    execute: async () => {
+        await executeMigrate();
     },
 });
 

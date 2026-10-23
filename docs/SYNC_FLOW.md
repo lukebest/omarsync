@@ -38,8 +38,9 @@ omarsync push
 
 ```
 omarsync pull            ← 只抓取,一个字节都不写进活配置
-   ├─ fetch 元数据仓库,detach 钉住 origin/main 的完整 commit
-   └─ mise dot sync --fetch-only
+   ├─ fetch 元数据仓库
+   ├─ 远程提交不是可信签名 → 拒绝检出(和 push 同一道门)
+   └─ 可信才 detach 钉住,并 mise dot sync --fetch-only
 
 omarsync apply --commit <40位sha>
    ├─ 1. 签名校验（trusted-keys）
