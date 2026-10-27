@@ -87,7 +87,14 @@ export function commitIsTrusted(mirror: string, sha: string): boolean {
 
     refuseInsideMirror(keys);
 
-    return gitCapture(["-C", mirror, "-c", `gpg.ssh.allowedSignersFile=${keys}`, "verify-commit", sha]).ok;
+    const pub = signaturePubkeyLine(mirror, sha);
+
+    // OpenPGP 只靠本机 GPG 钥匙圈就能让 verify-commit 成功,那不是 SSH trusted-keys。
+    if (!pub || !allowedSignersContain(data, pub)) {
+        return false;
+    }
+
+    return sshKeyAccepted(mirror, sha, pub, keys);
 }
 
 export function trustedKeysPresent(): boolean {
@@ -218,7 +225,87 @@ export function fingerprintOfPubkeyLine(pub: string): string | undefined {
     return /\S+\s+(SHA256:[A-Za-z0-9+/]+=*)/.exec(out)?.[1];
 }
 
+function sshPubkey(pub: string): { type: string; data: string } | undefined {
+    const match = /^(ssh-[a-z0-9-]+)\s+([A-Za-z0-9+/=]+)$/.exec(pub.trim());
+
+    if (!match?.[1] || !match[2]) {
+        return undefined;
+    }
+
+    return { type: match[1], data: match[2] };
+}
+
+/** trusted-keys 里是否按 key type + key material 登记了这把公钥 */
+function allowedSignersContain(data: string, pub: string): boolean {
+    const key = sshPubkey(pub);
+
+    if (!key) {
+        return false;
+    }
+
+    for (const raw of data.split("\n")) {
+        const line = raw.trim();
+
+        if (line === "" || line.startsWith("#")) {
+            continue;
+        }
+
+        const tokens = line.split(/\s+/);
+
+        for (let index = 0; index < tokens.length - 1; index++) {
+            if (tokens[index] === key.type && tokens[index + 1] === key.data) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/** 这份 allowed signers 下 git 报告的状态。%G? 为 G 只说明签名被接受;
+ *  OpenPGP 走本机钥匙圈时同样是 G,调用方还要核对 %GK 是不是这把 SSH 密钥。 */
+function signerVerdict(mirror: string, sha: string, allowedFile: string): { flag: string; fingerprint: string } | undefined {
+    const out = gitOut([
+        "-C",
+        mirror,
+        "-c",
+        "log.showSignature=false",
+        "-c",
+        `gpg.ssh.allowedSignersFile=${allowedFile}`,
+        "log",
+        "-1",
+        "--format=%G?|%GK",
+        sha,
+    ]);
+
+    if (!out) {
+        return undefined;
+    }
+
+    const separator = out.indexOf("|");
+
+    if (separator <= 0) {
+        return undefined;
+    }
+
+    return { flag: out.slice(0, separator), fingerprint: out.slice(separator + 1) };
+}
+
+function sshKeyAccepted(mirror: string, sha: string, pub: string, allowedFile: string): boolean {
+    const fingerprint = fingerprintOfPubkeyLine(pub);
+    const verdict = fingerprint ? signerVerdict(mirror, sha, allowedFile) : undefined;
+
+    return verdict?.flag === "G" && verdict.fingerprint === fingerprint;
+}
+
 export function pubkeyVerifiesCommit(mirror: string, sha: string, pub: string): boolean {
+    const want = sshPubkey(pub);
+    const got = sshPubkey(signaturePubkeyLine(mirror, sha) ?? "");
+
+    if (!want || !got || want.type !== got.type || want.data !== got.data) {
+        return false;
+    }
+
     const mktemp = resolveTool("mktemp");
 
     if (!mktemp) {
@@ -231,9 +318,11 @@ export function pubkeyVerifiesCommit(mirror: string, sha: string, pub: string): 
         return false;
     }
 
-    writeFileSync(tmp, `* namespaces="git" ${pub}\n`);
+    const normalized = `${want.type} ${want.data}`;
 
-    const ok = gitCapture(["-C", mirror, "-c", `gpg.ssh.allowedSignersFile=${tmp}`, "verify-commit", sha]).ok;
+    writeFileSync(tmp, `* namespaces="git" ${normalized}\n`);
+
+    const ok = sshKeyAccepted(mirror, sha, normalized, tmp);
 
     try {
         unlinkSync(tmp);

@@ -422,5 +422,88 @@ else
   bad "确认后只签名去掉 home/ 的可信树"
 fi
 
+# apply 打开 post-apply hooks 只看 commitIsTrusted。
+# 裸 git verify-commit 成功(未登记的 SSH 密钥,或本机 GPG 钥匙圈)不能算通过。
+trust_gate() {
+  local home=$1 mirror=$2 sha=$3
+  (
+    cd "$ROOT/cli"
+    HOME="$home" MIRROR="$mirror" SHA="$sha" bun -e '
+import { commitIsTrusted } from "./src/lib/trust.ts";
+process.stdout.write(commitIsTrusted(process.env.MIRROR, process.env.SHA) ? "yes" : "no");
+'
+  )
+}
+
+gate_home="$TMP/gate"
+setup_key "$gate_home" "$gate_home/key"
+init_mirror "$gate_home" "$gate_home/key"
+gate_mirror="$gate_home/.local/state/omarsync/repo"
+printf 'trusted\n' >"$gate_mirror/file"
+git -C "$gate_mirror" add file
+git -C "$gate_mirror" commit -q -m trusted
+gate_good=$(git -C "$gate_mirror" rev-parse HEAD)
+if [[ $(trust_gate "$gate_home" "$gate_mirror" "$gate_good") == yes ]]; then
+  ok "已登记的 SSH 签名可以通过 apply 信任门"
+else
+  bad "已登记的 SSH 签名可以通过 apply 信任门"
+fi
+
+ssh-keygen -q -t ed25519 -f "$gate_home/other" -N "" -C other
+git -C "$gate_mirror" config user.signingkey "$gate_home/other"
+printf 'other\n' >>"$gate_mirror/file"
+git -C "$gate_mirror" add file
+git -C "$gate_mirror" commit -q -m other
+gate_other=$(git -C "$gate_mirror" rev-parse HEAD)
+printf '* namespaces="git" %s\n' "$(awk '{print $1 " " $2}' "$gate_home/other.pub")" >"$gate_home/other.allow"
+git -C "$gate_mirror" config gpg.ssh.allowedSignersFile "$gate_home/other.allow"
+if git -C "$gate_mirror" verify-commit "$gate_other" >/dev/null 2>&1 \
+  && [[ $(trust_gate "$gate_home" "$gate_mirror" "$gate_other") == no ]] \
+  && [[ $(trust_gate "$gate_home" "$gate_mirror" "$gate_good") == yes ]]; then
+  ok "未登记的 SSH 签名即使裸 verify-commit 成功也不能通过 apply 信任门"
+else
+  bad "未登记的 SSH 签名即使裸 verify-commit 成功也不能通过 apply 信任门"
+fi
+
+gpg_home="$TMP/gpg"
+mkdir -p "$gpg_home/.gnupg" "$gpg_home/.config/omarsync" "$gpg_home/.local/state/omarsync"
+chmod 700 "$gpg_home/.gnupg"
+ssh-keygen -q -t ed25519 -f "$gpg_home/key" -N "" -C ssh-only
+printf '* namespaces="git" %s\n' "$(awk '{print $1 " " $2}' "$gpg_home/key.pub")" >"$gpg_home/.config/omarsync/trusted-keys"
+cat >"$gpg_home/batch" <<'EOF'
+%no-protection
+Key-Type: eddsa
+Key-Curve: ed25519
+Key-Usage: sign
+Name-Real: Omarsync Test
+Name-Email: gpg-omarsync@localhost
+Expire-Date: 0
+%commit
+EOF
+GNUPGHOME="$gpg_home/.gnupg" gpg --batch --pinentry-mode loopback --generate-key "$gpg_home/batch" >/dev/null
+gpg_fp=$(GNUPGHOME="$gpg_home/.gnupg" gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+gpg_mirror="$gpg_home/.local/state/omarsync/repo"
+git init -q -b main "$gpg_mirror"
+git -C "$gpg_mirror" config user.email gpg-omarsync@localhost
+git -C "$gpg_mirror" config user.name omarsync
+git -C "$gpg_mirror" config gpg.format openpgp
+git -C "$gpg_mirror" config user.signingkey "$gpg_fp"
+printf 'gpg\n' >"$gpg_mirror/file"
+git -C "$gpg_mirror" add file
+HOME="$gpg_home" GNUPGHOME="$gpg_home/.gnupg" git -C "$gpg_mirror" -c gpg.format=openpgp -c user.signingkey="$gpg_fp" commit -q -S -m gpg
+gpg_sha=$(git -C "$gpg_mirror" rev-parse HEAD)
+if env -u GNUPGHOME HOME="$gpg_home" git -C "$gpg_mirror" -c "gpg.ssh.allowedSignersFile=$gpg_home/.config/omarsync/trusted-keys" verify-commit "$gpg_sha" >/dev/null 2>&1 \
+  && [[ $(trust_gate "$gpg_home" "$gpg_mirror" "$gpg_sha") == no ]]; then
+  ok "只被本机 GPG 钥匙圈接受的签名不能通过 apply 信任门"
+else
+  bad "只被本机 GPG 钥匙圈接受的签名不能通过 apply 信任门"
+fi
+
+if ! grep -R -q 'verify-commit' "$ROOT/cli/dist" --include='*.js'; then
+  ok "dist 不再把 verify-commit 成功当成信任"
+else
+  bad "dist 不再把 verify-commit 成功当成信任"
+fi
+
 printf '%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

@@ -4903,7 +4903,11 @@ function commitIsTrusted(mirror, sha) {
     return false;
   }
   refuseInsideMirror(keys);
-  return gitCapture(["-C", mirror, "-c", `gpg.ssh.allowedSignersFile=${keys}`, "verify-commit", sha]).ok;
+  const pub = signaturePubkeyLine(mirror, sha);
+  if (!pub || !allowedSignersContain(data, pub)) {
+    return false;
+  }
+  return sshKeyAccepted(mirror, sha, pub, keys);
 }
 function trustedKeysPresent() {
   if (!isFile(paths.trustedKeysFile)) {
@@ -4992,7 +4996,65 @@ function fingerprintOfPubkeyLine(pub) {
   }
   return /\S+\s+(SHA256:[A-Za-z0-9+/]+=*)/.exec(out)?.[1];
 }
+function sshPubkey(pub) {
+  const match = /^(ssh-[a-z0-9-]+)\s+([A-Za-z0-9+/=]+)$/.exec(pub.trim());
+  if (!match?.[1] || !match[2]) {
+    return void 0;
+  }
+  return { type: match[1], data: match[2] };
+}
+function allowedSignersContain(data, pub) {
+  const key = sshPubkey(pub);
+  if (!key) {
+    return false;
+  }
+  for (const raw of data.split("\n")) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) {
+      continue;
+    }
+    const tokens = line.split(/\s+/);
+    for (let index = 0; index < tokens.length - 1; index++) {
+      if (tokens[index] === key.type && tokens[index + 1] === key.data) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+function signerVerdict(mirror, sha, allowedFile) {
+  const out = gitOut([
+    "-C",
+    mirror,
+    "-c",
+    "log.showSignature=false",
+    "-c",
+    `gpg.ssh.allowedSignersFile=${allowedFile}`,
+    "log",
+    "-1",
+    "--format=%G?|%GK",
+    sha
+  ]);
+  if (!out) {
+    return void 0;
+  }
+  const separator = out.indexOf("|");
+  if (separator <= 0) {
+    return void 0;
+  }
+  return { flag: out.slice(0, separator), fingerprint: out.slice(separator + 1) };
+}
+function sshKeyAccepted(mirror, sha, pub, allowedFile) {
+  const fingerprint = fingerprintOfPubkeyLine(pub);
+  const verdict = fingerprint ? signerVerdict(mirror, sha, allowedFile) : void 0;
+  return verdict?.flag === "G" && verdict.fingerprint === fingerprint;
+}
 function pubkeyVerifiesCommit(mirror, sha, pub) {
+  const want = sshPubkey(pub);
+  const got = sshPubkey(signaturePubkeyLine(mirror, sha) ?? "");
+  if (!want || !got || want.type !== got.type || want.data !== got.data) {
+    return false;
+  }
   const mktemp = resolveTool("mktemp");
   if (!mktemp) {
     return false;
@@ -5001,9 +5063,10 @@ function pubkeyVerifiesCommit(mirror, sha, pub) {
   if (tmp === "") {
     return false;
   }
-  writeFileSync(tmp, `* namespaces="git" ${pub}
+  const normalized = `${want.type} ${want.data}`;
+  writeFileSync(tmp, `* namespaces="git" ${normalized}
 `);
-  const ok = gitCapture(["-C", mirror, "-c", `gpg.ssh.allowedSignersFile=${tmp}`, "verify-commit", sha]).ok;
+  const ok = sshKeyAccepted(mirror, sha, normalized, tmp);
   try {
     unlinkSync(tmp);
   } catch {
