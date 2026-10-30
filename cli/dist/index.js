@@ -8282,8 +8282,8 @@ function packageChanged(remote, local) {
 }
 function currentText(mirror, localTmp) {
   const names = ["current/theme.name", "current/background"];
-  const remote = names.map((name) => show(mirror, name) ?? "").join("\0");
-  const local = names.map((name) => readTextFile(`${localTmp}/${name}`) ?? "").join("\0");
+  const remote = names.map((name) => (show(mirror, name) ?? "").trim()).join("\0");
+  const local = names.map((name) => (readTextFile(`${localTmp}/${name}`) ?? "").trim()).join("\0");
   return { remote, local };
 }
 function createPlan(mirror, baseTree, localTree, localTmp, ignored) {

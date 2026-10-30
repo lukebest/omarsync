@@ -177,8 +177,8 @@ function packageChanged(remote: Map<string, string>, local: Map<string, string>)
 
 function currentText(mirror: string, localTmp: string): { remote: string; local: string } {
     const names = ["current/theme.name", "current/background"];
-    const remote = names.map((name) => show(mirror, name) ?? "").join("\0");
-    const local = names.map((name) => readTextFile(`${localTmp}/${name}`) ?? "").join("\0");
+    const remote = names.map((name) => (show(mirror, name) ?? "").trim()).join("\0");
+    const local = names.map((name) => (readTextFile(`${localTmp}/${name}`) ?? "").trim()).join("\0");
 
     return { remote, local };
 }
