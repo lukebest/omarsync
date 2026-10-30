@@ -144,6 +144,38 @@ package:amd-ucode
 
 手动 push 显示的选择清单来自“远程签名快照 vs 本机快照”的真实差异，而不是只显示你刚改过的文件。未选路径保留远程版本；删除项默认不选，只有手动勾选才删除远程。包清单按组选择，选中时与远程做并集，因此不会因为本机没装某个 AUR 包就把它从远程删掉。
 
+### push 选择清单
+
+手动 push 会生成 `~/.local/state/omarsync/pending-push.selection`，并在编辑器里打开。它是**这一次 push 的发布清单**，不是同步配置，也不会进入仓库；每次 push 重新生成，可以直接删除。
+
+```text
+## Files
+- [x] file | M | home/.config/omarchy/shell.json
+- [ ] file | D | home/.config/autostart/Example.desktop
+
+## Plugins
+- [x] plugin | A | some.plugin-id
+
+## Package lists
+- [x] package | M | pacman
+
+## Hooks
+- [x] hook | M | 10-murmur.sh
+
+## Metadata
+- [x] current | M |
+```
+
+- `[x]` 发布这一项，`[ ]` 本次不发布。
+- `file` 后是 `M` 修改、`A` 新增、`D` 本机已删除。`D` 默认不选；只有勾选才会删除远程文件。
+- `plugin` 后是插件 id；`A/M/D` 含义同上。删除旧插件记录默认不选。
+- `package` 是包清单组：`pacman`、`aur` 或 `flatpak`。
+- `hook` 是 `~/.config/omarsync-hooks/post-apply.d/` 下的单个文件。
+- `current` 是当前主题和壁纸；只有确实变化时才出现。
+- 没有出现的内容表示本机与远程一致，或已被 `push-ignore` 忽略。
+- **不要删除行，也不要改格式**；只改方括号里的 `x` 和空格。缺行、重复项或未知条目会让 push 直接中止。
+- 未发布的文件/插件在下次 push 仍会作为候选出现，直到你发布它，或者把它加入 `push-ignore`。
+
 ## apply 的行为
 
 - 先备份各 scope 路径下的现有文件,然后按签名 `miseHead` 回滚到对应 mise 检查点。快照尚未进入本机索引时,只有远程尖端与签名树一致才先导入远程版本。`push-ignore` 匹配的本机文件会在回滚前收走、回滚后恢复；远程有而本机没有的 ignored 路径不会被创建。

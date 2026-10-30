@@ -317,7 +317,9 @@ export function writeSelectionFile(plan: SelectionPlan): string {
         ...plan.hooks.map(hookLine),
         "",
         "## Metadata",
-        `- [${plan.current.selected ? "x" : " "}] current | ${plan.current.status} |`,
+        ...(plan.current.candidate
+            ? [`- [${plan.current.selected ? "x" : " "}] current | ${plan.current.status} |`]
+            : []),
         "",
     ];
 
@@ -421,6 +423,10 @@ export function readSelectionFile(plan: SelectionPlan): SelectionPlan {
 
             item!.selected = parsed.selected;
         } else if (parsed.kind === "current") {
+            if (!plan.current.candidate) {
+                failure(key, index + 1);
+            }
+
             if (parsed.value !== "" || parsed.status !== plan.current.status) {
                 failure(key, index + 1);
             }
@@ -455,7 +461,7 @@ export function readSelectionFile(plan: SelectionPlan): SelectionPlan {
         }
     }
 
-    if (!seen.has("current:")) {
+    if (plan.current.candidate && !seen.has("current:")) {
         die("选择清单缺少 current 条目");
     }
 

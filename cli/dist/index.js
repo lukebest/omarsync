@@ -8389,7 +8389,7 @@ function writeSelectionFile(plan) {
     ...plan.hooks.map(hookLine),
     "",
     "## Metadata",
-    `- [${plan.current.selected ? "x" : " "}] current | ${plan.current.status} |`,
+    ...plan.current.candidate ? [`- [${plan.current.selected ? "x" : " "}] current | ${plan.current.status} |`] : [],
     ""
   ];
   const file = `${paths.stateDir}/pending-push.selection`;
@@ -8460,6 +8460,9 @@ function readSelectionFile(plan) {
       }
       item.selected = parsed.selected;
     } else if (parsed.kind === "current") {
+      if (!plan.current.candidate) {
+        failure(key, index + 1);
+      }
       if (parsed.value !== "" || parsed.status !== plan.current.status) {
         failure(key, index + 1);
       }
@@ -8488,7 +8491,7 @@ function readSelectionFile(plan) {
       die(`选择清单缺少包清单条目: ${item.group}`);
     }
   }
-  if (!seen.has("current:")) {
+  if (plan.current.candidate && !seen.has("current:")) {
     die("选择清单缺少 current 条目");
   }
   if (!plan.files.some((item) => item.selected) && !plan.plugins.some((item) => item.selected) && !plan.hooks.some((item) => item.selected) && !plan.packages.some((item) => item.selected) && !plan.current.selected) {
