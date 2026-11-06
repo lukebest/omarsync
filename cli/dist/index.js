@@ -8574,6 +8574,29 @@ ${finalDiff}
 function normalizedRemote(url) {
   return url.replace(/\/+$/, "").replace(/\.git$/, "");
 }
+function reviewWithVsCode(mirror, baseTree, selectedTree, hasMetaChanges) {
+  if (!resolveTool("code")) {
+    return false;
+  }
+  log.info("正在用 VS Code 左右对比;关闭当前 diff 标签可继续下一个文件");
+  if (hasMetaChanges && !git(["-C", mirror, "difftool", "--no-prompt", "--tool=vscode", "--cached"])) {
+    return false;
+  }
+  if (baseTree !== selectedTree) {
+    return git([
+      "--git-dir",
+      historyRepo(),
+      "difftool",
+      "--no-prompt",
+      "--tool=vscode",
+      baseTree,
+      selectedTree,
+      "--",
+      "home"
+    ]);
+  }
+  return true;
+}
 function planHasCandidates(plan) {
   return plan.files.length > 0 || plan.plugins.length > 0 || plan.hooks.length > 0 || plan.packages.length > 0 || plan.current.candidate;
 }
@@ -8692,7 +8715,7 @@ ${fileDiff}
       const reviewFile = `${paths.stateDir}/pending-push.diff`;
       writeFileSync(reviewFile, review);
       log.info(`完整 diff 已写入 ${reviewFile}`);
-      if (!skipConfirm) {
+      if (!skipConfirm && !reviewWithVsCode(mirror, baseTree, built.tree, /\S/.test(metaDiff))) {
         openInEditor([reviewFile]);
       }
     }
