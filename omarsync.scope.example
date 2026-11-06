@@ -1,38 +1,49 @@
-# Installed copy: ~/.config/omarsync/scope
-# This file stays on the machine. The copy inside a sync repository is ignored.
-# Paths are relative to $HOME. Missing paths are skipped.
-# Optional excludes follow a pipe and are comma-separated patterns
-# (translated to mise dot exclude globs).
-# .git directories, node_modules, and .env files are always skipped.
-# .ssh, .config/gh, .config/mise, key files, and the omarsync trust directory
-# are rejected. Removing a line stops tracking that directory.
-# The plugin directory (.config/omarchy/plugins) is never tracked by mise,
-# even without the plugins/ exclude below; plugins sync only as signed
-# snapshots, and ~/.config/omarsync/plugins-skip keeps machine-specific
-# plugins out of the snapshot entirely.
-# Machine-specific files are excluded by default: monitors.lua (display
-# layout), input.lua (touchpad/keyboard), envs.lua (GPU/variables) differ
-# per machine. Delete those patterns if you want them shared.
-# *-bak.* files are per-machine backups and never travel.
+# 本机安装副本：~/.config/omarsync/scope
+# 此文件只留在本机。同步仓库里的副本会被忽略。
+# 路径相对于 $HOME，路径不存在时会跳过。
+# 可选的排除项跟在竖线后，用逗号分隔（会转换成 mise dot 的 exclude glob）。
+# .git 目录、node_modules 和 .env 文件永远跳过。
+# .ssh、.config/gh、.config/mise、密钥文件以及 omarsync 信任目录都会被拒绝。
+# 删除某一行即停止同步该目录。
+# 插件目录（.config/omarchy/plugins）即使没有下面的 plugins/ 排除项，
+# 也永远不会被 mise 跟踪；插件只以签名快照形式同步，
+# 而 ~/.config/omarsync/plugins-skip 可把本机专属插件排除在快照之外。
+# 默认排除机器相关文件：monitors.lua（显示器布局）、input.lua（触控板/键盘）、
+# envs.lua（GPU/变量）因机器而异。想共享就删掉这些模式。
+# *-bak.* 是本机备份，永不同步。
 
-.config/omarchy | plugins/,*.bak.*,*-bak.*,*.mp4,*.mkv,*.webm,*.mov,*.avi,*.m4v
-.config/hypr | *.bak.*,*-bak.*,monitors.lua,input.lua,envs.lua
+# ── 桌面与外观 ──────────────────────────────────────────
+.config/omarchy | plugins/,*.bak.*,*-bak.*,*.backup-*,*.mp4,*.mkv,*.webm,*.mov,*.avi,*.m4v
+.config/hypr | *.bak.*,*-bak.*,*.backup-*,monitors.lua,input.lua
+
+# ── 终端 ────────────────────────────────────────────────
 .config/alacritty
 .config/ghostty
 .config/kitty
 .config/foot
+
+# ── 常用工具 ────────────────────────────────────────────
 .config/nvim
 .config/btop
 .config/lazygit
+
+# ── 系统集成 ────────────────────────────────────────────
 .config/autostart
-.local/share/flatpak/overrides
 .config/systemd/user
+.local/share/flatpak/overrides
 .local/bin | agent,cursor,cursor-agent
 .local/share/applications | mimeinfo.cache
 .local/share/icons/hicolor | icon-theme.cache
 
-# Qingjian input method (Fcitx5). Settings only; install the program itself on each machine.
+# ── 输入法（青简 / Fcitx5）──────────────────────────────
+# 只同步设置；程序本体需在每台机器上自行安装。
 .config/qingjian
 .config/fcitx5
-# Optional: your learned words and frequencies. The newest apply wins, so use it on one main machine.
+# 可选：词库和词频。最新写入的生效，所以只在一台主机上使用。
 # .local/share/qingjian | resources/,dicts/,install-manifest.json
+
+# ── 代理（FlClash）──────────────────────────────────────
+.local/share/com.follow.clash | FlClash.lock,*.tmp,cache.db,config.yaml,ASN.mmdb,GEOIP.dat,GEOIP.metadb,GEOSITE.dat,*.sqlite-wal,*.sqlite-shm,*.sqlite,profiles/*.yaml.bak,shared_preferences.json,profiles/367564998827839488.yaml
+
+# ── AI CLI 切换器（cc-switch）────────────────────────────
+.cc-switch | backups/,logs/,live-state.json,*.db,*.db-wal,*.db-shm,model-pricing.json,codex-catalog-history.json
