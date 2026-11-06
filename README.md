@@ -102,6 +102,27 @@ omarsync scope-path
 
 `migrate` 升级旧安装:元数据仓库里还有 `home/` 文件镜像的旧布局,改为通过 mise 发布文件并从仓库删除 `home/`(旧内容仍可从 git 历史找回)。删除前会核对当前提交的签名,列出将要留下的文件(含 post-apply 钩子)并要求再确认一次;没有可信签名、没有终端,或树在确认后又变了,都不会签名也不会推送。
 
+### 故障排查:`enrollment conflict in exclusions`
+
+症状:`pull`/`apply` 报 `mise ERROR enrollment conflict in exclusions; reconcile repository metadata before syncing`,dotfiles 抓取失败,活配置一个字节都不会写入。
+
+原因:两台机器各自按本机 scope/push-ignore 生成了不同的 mise exclude 规则。mise 对 manifest 的 `exclude` 字段只做**整字段**三方合并——本机和远程相对共同祖先都改过且不相等就拒绝,不做逐条并集,哪怕两边加的规则互不相交。面板的定时扫描会跑 reconcile 把本机规则持续加回,所以下面的修复要一口气做完;若中途又报同样的错,重跑一遍即可。
+
+应急:让本机 exclude 暂时向远程对齐(本机规则全部由 scope/push-ignore 推导,不是手工资产,事后自动重建):
+
+```sh
+REPO=~/.local/state/mise/history/repo.git
+git --git-dir=$REPO show main:.mise-history/manifest.json | jq -r '.exclude[]' | sort > /tmp/local-excl
+git --git-dir=$REPO show refs/omarsync/remote-dotfiles:.mise-history/manifest.json | jq -r '.exclude[]' | sort > /tmp/remote-excl
+# 删掉本机独有的 exclude,使本机清单回到共同祖先状态
+comm -23 /tmp/local-excl /tmp/remote-excl | while read -r g; do mise dot include "$g"; done
+mise dot save
+omarsync pull
+omarsync apply --commit <pull 输出的 40 位 sha>   # 终端里审阅后输 y,尽快执行
+```
+
+apply 成功后跑一次 `omarsync push`:开头的 reconcile 会把本机 exclude 按 scope/push-ignore 自动加回。被远程版本覆盖的本机文件不用慌,apply 前已整树备份到 `~/.local/state/omarsync/backup/<时间戳>/`,需要保留的本地修改从备份里挑回再 push。
+
 ## 同步哪些文件
 
 上传哪些文件只由本机的 `~/.config/omarsync/scope` 决定,可从面板编辑。同步仓库里的同名 scope 文件会被忽略(包括 `git pull` 之后),push 时会把它从快照里移除。每台机器各管各的 scope;远程改动无法让本机开始上传新路径。
