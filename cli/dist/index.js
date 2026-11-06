@@ -7987,6 +7987,17 @@ function mergeManifest(base, local, selected, deleted, ignored) {
   if (!base && Array.isArray(merged.exclude)) {
     merged.exclude = merged.exclude.filter((item) => typeof item !== "string" || !excluded.has(item));
   }
+  const excludeGlobs = new Set(
+    Array.isArray(merged.exclude) ? merged.exclude.filter((item) => typeof item === "string") : []
+  );
+  if (Array.isArray(local?.exclude)) {
+    for (const item of local.exclude) {
+      if (typeof item === "string" && !excluded.has(item)) {
+        excludeGlobs.add(item);
+      }
+    }
+  }
+  merged.exclude = [...excludeGlobs];
   for (const path of selected) {
     const already = baseEnrollment.some((entry) => {
       const root = entry && typeof entry === "object" && typeof entry.path === "string" ? entry.path : "";
@@ -8074,8 +8085,27 @@ function fetchRemoteDotfiles(url, branch) {
   }
   return { commit, tree };
 }
+function pendingExcludeAdds(remoteTree, localTree, ignored) {
+  const localManifest = readManifest(localTree);
+  if (!localManifest) {
+    return [];
+  }
+  const baseManifest = readManifest(remoteTree);
+  const merged = mergeManifest(baseManifest, localManifest, [], [], ignored);
+  const baseSet = new Set(
+    Array.isArray(baseManifest?.exclude) ? baseManifest.exclude.filter((item) => typeof item === "string") : []
+  );
+  return (Array.isArray(merged.exclude) ? merged.exclude : []).filter((item) => typeof item === "string").filter((glob) => !baseSet.has(glob));
+}
 function buildSelectedDotfiles(remote, localTree, selectedPaths2, selectedDeletes, ignored) {
-  if (selectedPaths2.length === 0 && selectedDeletes.length === 0) {
+  const localManifest = readManifest(localTree);
+  if (!localManifest) {
+    die("本机 mise 快照没有 manifest.json");
+  }
+  const baseManifest = readManifest(remote.tree);
+  const mergedManifest = mergeManifest(baseManifest, localManifest, selectedPaths2, selectedDeletes, ignored);
+  const manifestChanged = !baseManifest || !isDeepStrictEqual(baseManifest, mergedManifest);
+  if (selectedPaths2.length === 0 && selectedDeletes.length === 0 && !manifestChanged) {
     return { tree: remote.tree };
   }
   const tmp = mkdtempSync(join(dirname(historyRepo()), ".omarsync-index-"));
@@ -8107,13 +8137,7 @@ function buildSelectedDotfiles(remote, localTree, selectedPaths2, selectedDelete
         die(`无法写入树路径 ${path}`);
       }
     }
-    const localManifest = readManifest(localTree);
-    if (!localManifest) {
-      die("本机 mise 快照没有 manifest.json");
-    }
-    const baseManifest = readManifest(remote.tree);
-    const mergedManifest = mergeManifest(baseManifest, localManifest, selectedPaths2, selectedDeletes, ignored);
-    if (!baseManifest || !isDeepStrictEqual(baseManifest, mergedManifest)) {
+    if (manifestChanged) {
       writeManifest(indexFile, mergedManifest);
     }
     const tree = gitOutEnv(history(["write-tree"]), [`GIT_INDEX_FILE=${indexFile}`]);
@@ -8670,12 +8694,19 @@ async function executePush(skipConfirm = false) {
     exportLocalInto(localTmp);
     const ignored = loadPushIgnore();
     const plan = createPlan(mirror, baseTree, localTree, localTmp, ignored);
-    if (!planHasCandidates(plan)) {
+    const excludeAdds = pendingExcludeAdds(baseTree, localTree, ignored);
+    if (excludeAdds.length > 0) {
+      log.info(`将发布 ${excludeAdds.length} 条本机 exclude 规则(与远程并集,规避 mise 整字段合并冲突):`);
+      for (const glob of excludeAdds) {
+        log.info(`  ${glob}`);
+      }
+    }
+    if (!planHasCandidates(plan) && excludeAdds.length === 0) {
       log.info("没有需要推送的变化");
       executeStatus(false);
       return;
     }
-    if (!skipConfirm && stdinIsTty()) {
+    if (!skipConfirm && stdinIsTty() && planHasCandidates(plan)) {
       const selectionFile = writeSelectionFile(plan);
       log.info(`选择清单已写入 ${selectionFile}`);
       openInEditor([selectionFile]);
@@ -8683,10 +8714,10 @@ async function executePush(skipConfirm = false) {
         die("已取消,未推送");
       }
       readSelectionFile(plan);
-      if (!planHasSelection(plan)) {
+      if (!planHasSelection(plan) && excludeAdds.length === 0) {
         die("没有勾选任何内容,已取消");
       }
-    } else if (!planHasSelection(plan)) {
+    } else if (!planHasSelection(plan) && excludeAdds.length === 0) {
       log.info("没有需要发布的变化(删除项默认不选)");
       executeStatus(false);
       return;

@@ -71,6 +71,26 @@ function mergeManifest(
         merged.exclude = merged.exclude.filter((item) => typeof item !== "string" || !excluded.has(item));
     }
 
+    // exclude 取远程与本机的单调并集。mise 对该字段只做整字段三方合并:
+    // 两台机器各自加过规则就 bail("enrollment conflict in exclusions")。
+    // 发布端并集后,接收端相对共同祖先只有一侧变化,合并永远可解。
+    // push-ignore 派生的规则只留在本机,不发布。
+    const excludeGlobs = new Set(
+        Array.isArray(merged.exclude)
+            ? merged.exclude.filter((item): item is string => typeof item === "string")
+            : [],
+    );
+
+    if (Array.isArray(local?.exclude)) {
+        for (const item of local.exclude) {
+            if (typeof item === "string" && !excluded.has(item)) {
+                excludeGlobs.add(item);
+            }
+        }
+    }
+
+    merged.exclude = [...excludeGlobs];
+
     // 选中文件若属于远程未 enrollment 的根,把本地 enrollment 条目补进来。
     for (const path of selected) {
         const already = baseEnrollment.some((entry) => {
@@ -205,6 +225,32 @@ export interface BuiltDotfiles {
     readonly commit?: string;
 }
 
+/** 本机将通过并集发布到远程的新增 exclude 规则(相对远程 manifest,已扣除 push-ignore)。
+ *  没有文件勾选时,push 仍可能因为这批规则需要一次发布。 */
+export function pendingExcludeAdds(
+    remoteTree: string,
+    localTree: string,
+    ignored: PushIgnore,
+): string[] {
+    const localManifest = readManifest(localTree);
+
+    if (!localManifest) {
+        return [];
+    }
+
+    const baseManifest = readManifest(remoteTree);
+    const merged = mergeManifest(baseManifest, localManifest, [], [], ignored);
+    const baseSet = new Set(
+        Array.isArray(baseManifest?.exclude)
+            ? baseManifest.exclude.filter((item): item is string => typeof item === "string")
+            : [],
+    );
+
+    return (Array.isArray(merged.exclude) ? merged.exclude : [])
+        .filter((item): item is string => typeof item === "string")
+        .filter((glob) => !baseSet.has(glob));
+}
+
 /** 构造 TM/M;没有勾选文件时直接返回远程树 */
 export function buildSelectedDotfiles(
     remote: RemoteDotfiles,
@@ -213,7 +259,19 @@ export function buildSelectedDotfiles(
     selectedDeletes: readonly string[],
     ignored: PushIgnore,
 ): BuiltDotfiles {
-    if (selectedPaths.length === 0 && selectedDeletes.length === 0) {
+    // manifest 先于 index 读取:即使没有勾选文件,exclude 的并集变化本身
+    // 也是一次需要发布的 dotfiles 提交。
+    const localManifest = readManifest(localTree);
+
+    if (!localManifest) {
+        die("本机 mise 快照没有 manifest.json");
+    }
+
+    const baseManifest = readManifest(remote.tree);
+    const mergedManifest = mergeManifest(baseManifest, localManifest, selectedPaths, selectedDeletes, ignored);
+    const manifestChanged = !baseManifest || !isDeepStrictEqual(baseManifest, mergedManifest);
+
+    if (selectedPaths.length === 0 && selectedDeletes.length === 0 && !manifestChanged) {
         return { tree: remote.tree };
     }
 
@@ -257,16 +315,7 @@ export function buildSelectedDotfiles(
             }
         }
 
-        const localManifest = readManifest(localTree);
-
-        if (!localManifest) {
-            die("本机 mise 快照没有 manifest.json");
-        }
-
-        const baseManifest = readManifest(remote.tree);
-        const mergedManifest = mergeManifest(baseManifest, localManifest, selectedPaths, selectedDeletes, ignored);
-
-        if (!baseManifest || !isDeepStrictEqual(baseManifest, mergedManifest)) {
+        if (manifestChanged) {
             writeManifest(indexFile, mergedManifest);
         }
 

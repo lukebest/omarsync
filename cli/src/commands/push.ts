@@ -17,6 +17,7 @@ import {
     buildSelectedDotfiles,
     fetchRemoteDotfiles,
     importDotfilesCommit,
+    pendingExcludeAdds,
     remoteMiseHead,
     selectedPaths,
 } from "../lib/selective-push";
@@ -271,15 +272,24 @@ export async function executePush(skipConfirm = false): Promise<void> {
 
         const ignored = loadPushIgnore();
         const plan = createPlan(mirror, baseTree, localTree, localTmp, ignored);
+        const excludeAdds = pendingExcludeAdds(baseTree, localTree, ignored);
 
-        if (!planHasCandidates(plan)) {
+        if (excludeAdds.length > 0) {
+            log.info(`将发布 ${excludeAdds.length} 条本机 exclude 规则(与远程并集,规避 mise 整字段合并冲突):`);
+
+            for (const glob of excludeAdds) {
+                log.info(`  ${glob}`);
+            }
+        }
+
+        if (!planHasCandidates(plan) && excludeAdds.length === 0) {
             log.info("没有需要推送的变化");
             executeStatus(false);
 
             return;
         }
 
-        if (!skipConfirm && stdinIsTty()) {
+        if (!skipConfirm && stdinIsTty() && planHasCandidates(plan)) {
             const selectionFile = writeSelectionFile(plan);
 
             log.info(`选择清单已写入 ${selectionFile}`);
@@ -291,10 +301,10 @@ export async function executePush(skipConfirm = false): Promise<void> {
 
             readSelectionFile(plan);
 
-            if (!planHasSelection(plan)) {
+            if (!planHasSelection(plan) && excludeAdds.length === 0) {
                 die("没有勾选任何内容,已取消");
             }
-        } else if (!planHasSelection(plan)) {
+        } else if (!planHasSelection(plan) && excludeAdds.length === 0) {
             log.info("没有需要发布的变化(删除项默认不选)");
             executeStatus(false);
 
