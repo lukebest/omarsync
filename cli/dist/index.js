@@ -7696,9 +7696,7 @@ function packagesDirty(mirror, tmp, ignoredPackages) {
     const local = packageLines(readTextFile(`${tmp}/${relative}`), group);
     for (const id of ignoredPackages) {
       remote.delete(id);
-    }
-    if (remote.size !== local.size) {
-      return true;
+      local.delete(id);
     }
     for (const [id, line] of local) {
       if (remote.get(id) !== line) {
@@ -7708,13 +7706,23 @@ function packagesDirty(mirror, tmp, ignoredPackages) {
   }
   return false;
 }
+function canonicalStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalStringify).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonicalStringify(item)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 function pluginRecords(text, ignored) {
   const records = /* @__PURE__ */ new Map();
   try {
     const rows = JSON.parse(text ?? "[]");
     for (const row of rows) {
       if (typeof row.id === "string" && !ignored.has(row.id)) {
-        records.set(row.id, JSON.stringify(row));
+        records.set(row.id, canonicalStringify(row));
       }
     }
   } catch {
@@ -8708,6 +8716,11 @@ async function executePush(skipConfirm = false) {
     }
     if (!planHasCandidates(plan) && excludeAdds.length === 0) {
       log.info("没有需要推送的变化");
+      executeStatus(false);
+      return;
+    }
+    if (!planHasSelection(plan) && excludeAdds.length === 0) {
+      log.info("没有需要发布的新增/修改;远程有而本机未跟踪的路径默认保留远程,本次不推送");
       executeStatus(false);
       return;
     }

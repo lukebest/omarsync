@@ -324,12 +324,12 @@ function packagesDirty(mirror: string, tmp: string, ignoredPackages: ReadonlySet
         const remote = packageLines(readTextFile(`${mirror}/${relative}`), group);
         const local = packageLines(readTextFile(`${tmp}/${relative}`), group);
 
+        // ignored 两边都过滤;只看本机相对远程的新增/修改。
+        // 远程有、本机没装的包不是本机改动(并集发布时也不会删它们),
+        // 否则一台机器少装几个包就会让 push 灯永久常亮。
         for (const id of ignoredPackages) {
             remote.delete(id);
-        }
-
-        if (remote.size !== local.size) {
-            return true;
+            local.delete(id);
         }
 
         for (const [id, line] of local) {
@@ -342,6 +342,24 @@ function packagesDirty(mirror: string, tmp: string, ignoredPackages: ReadonlySet
     return false;
 }
 
+/** 稳定键序的 JSON:导出方与镜像里的同一记录字段排列可能不同,
+ *  裸 JSON.stringify 会把纯键序差异误判成内容变化,让 push 灯常亮。 */
+function canonicalStringify(value: unknown): string {
+    if (Array.isArray(value)) {
+        return `[${value.map(canonicalStringify).join(",")}]`;
+    }
+
+    if (value !== null && typeof value === "object") {
+        const entries = Object.entries(value as Record<string, unknown>)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, item]) => `${JSON.stringify(key)}:${canonicalStringify(item)}`);
+
+        return `{${entries.join(",")}}`;
+    }
+
+    return JSON.stringify(value);
+}
+
 function pluginRecords(text: string | undefined, ignored: ReadonlySet<string>): Map<string, string> {
     const records = new Map<string, string>();
 
@@ -350,7 +368,7 @@ function pluginRecords(text: string | undefined, ignored: ReadonlySet<string>): 
 
         for (const row of rows) {
             if (typeof row.id === "string" && !ignored.has(row.id)) {
-                records.set(row.id, JSON.stringify(row));
+                records.set(row.id, canonicalStringify(row));
             }
         }
     } catch {

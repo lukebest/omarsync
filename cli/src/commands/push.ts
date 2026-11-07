@@ -289,6 +289,15 @@ export async function executePush(skipConfirm = false): Promise<void> {
             return;
         }
 
+        // 默认选择下没有任何可发布项(候选全是 D,即远程有、本机 scope 未跟踪)
+        // 且没有 manifest 增量时,不开编辑器:用户没有东西可勾,弹清单只会以错误收场。
+        if (!planHasSelection(plan) && excludeAdds.length === 0) {
+            log.info("没有需要发布的新增/修改;远程有而本机未跟踪的路径默认保留远程,本次不推送");
+            executeStatus(false);
+
+            return;
+        }
+
         if (!skipConfirm && stdinIsTty() && planHasCandidates(plan)) {
             const selectionFile = writeSelectionFile(plan);
 
