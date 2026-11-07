@@ -298,29 +298,37 @@ function packageLine(item: PackageItem): string {
     return `- [${item.selected ? "x" : " "}] package | ${item.status} | ${item.group}`;
 }
 
+/** 分区:没有候选时整段省略。## 标题以 # 开头,readSelectionFile 会自动跳过。 */
+function section(title: string, lines: string[]): string[] {
+    return lines.length === 0 ? [] : [`## ${title}`, ...lines, ""];
+}
+
 export function writeSelectionFile(plan: SelectionPlan): string {
+    const deletes = plan.files.filter((item) => item.status === "D").map(fileLine);
+    const upserts = plan.files.filter((item) => item.status !== "D").map(fileLine);
+
     const lines = [
-        "# Omarsync push selection",
-        "# [x] 发布，[ ] 不发布。删除项(D)默认不选。改完保存,回终端确认。",
-        "# 不要删除条目;只改方括号里的 x/空格。",
+        "# Omarsync 推送选择",
+        "# [x] = 发布这项改动,[ ] = 跳过(远程保持原样)。只改方括号里的 x/空格,不要删行或改其他内容。",
+        "# 行内字母:A=本机新增,M=已修改,D=远程有而本机没有(勾选即从远程删除,默认不勾=保留远程)。",
+        "# 改完保存,回终端确认。",
         "",
-        "## Files",
-        ...plan.files.map(fileLine),
-        "",
-        "## Plugins",
-        ...plan.plugins.map(pluginLine),
-        "",
-        "## Package lists",
-        ...plan.packages.map(packageLine),
-        "",
-        "## Hooks",
-        ...plan.hooks.map(hookLine),
-        "",
-        "## Metadata",
+        ...section(
+            `将从远程删除(${deletes.length})——本机 scope 未跟踪或已删除;默认保留远程,勾选才删`,
+            deletes,
+        ),
+        ...section(`将发布的文件(${upserts.length})——新增/修改,默认发布`, upserts),
+        ...section(`插件(${plan.plugins.length})——A 新增 / M 修改`, plan.plugins.map(pluginLine)),
+        ...section(
+            `包清单(${plan.packages.length})——pacman / aur / flatpak 按组,选中与远程取并集`,
+            plan.packages.map(packageLine),
+        ),
+        ...section(`apply 钩子(${plan.hooks.length})`, plan.hooks.map(hookLine)),
         ...(plan.current.candidate
-            ? [`- [${plan.current.selected ? "x" : " "}] current | ${plan.current.status} |`]
+            ? section("主题与壁纸(元数据)", [
+                  `- [${plan.current.selected ? "x" : " "}] current | ${plan.current.status} |`,
+              ])
             : []),
-        "",
     ];
 
     const file = `${paths.stateDir}/pending-push.selection`;

@@ -170,20 +170,22 @@ package:amd-ucode
 手动 push 会生成 `~/.local/state/omarsync/pending-push.selection`，并在编辑器里打开。它是**这一次 push 的发布清单**，不是同步配置，也不会进入仓库；每次 push 重新生成，可以直接删除。
 
 ```text
-## Files
-- [x] file | M | home/.config/omarchy/shell.json
+## 将从远程删除(1)——本机 scope 未跟踪或已删除;默认保留远程,勾选才删
 - [ ] file | D | home/.config/autostart/Example.desktop
 
-## Plugins
+## 将发布的文件(1)——新增/修改,默认发布
+- [x] file | M | home/.config/omarchy/shell.json
+
+## 插件(1)——A 新增 / M 修改
 - [x] plugin | A | some.plugin-id
 
-## Package lists
+## 包清单(1)——pacman / aur / flatpak 按组,选中与远程取并集
 - [x] package | M | pacman
 
-## Hooks
+## apply 钩子(1)
 - [x] hook | M | 10-murmur.sh
 
-## Metadata
+## 主题与壁纸(元数据)
 - [x] current | M |
 ```
 
