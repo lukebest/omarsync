@@ -59,7 +59,17 @@ function commandEnv(extra: readonly string[]): Record<string, string> {
         OMARCHY_PATH: process.env["OMARCHY_PATH"] ?? "/usr/share/omarchy",
     };
 
-    for (const name of ["XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"]) {
+    // 图形会话变量:VS Code 等 GUI 工具需要靠它们连到当前 Wayland/X11 会话。
+    for (const name of [
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_RUNTIME_DIR",
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+        "DBUS_SESSION_BUS_ADDRESS",
+    ]) {
         const value = process.env[name];
 
         if (value) {

@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 
+import { reviewWithVsCode } from "../lib/diff-review";
 import { isDir } from "../lib/exec";
 import { git, gitCapture, gitOut } from "../lib/git";
 import { openInEditor } from "../lib/editor";
@@ -39,9 +40,28 @@ function reviewSnapshot(mirror: string, sha: string): void {
     const base = ancestors.find((commit) => commitIsTrusted(mirror, commit)) ?? EMPTY_TREE;
     const range = base === EMPTY_TREE ? sha : `${base}..${sha}`;
     const commits = gitCapture(["-C", mirror, "log", "--format=%H %s", range]);
+
+    if (!commits.ok) {
+        die("无法读取远程提交历史,未签名也未推送");
+    }
+
+    // Diff Editor 只展示文件差异;提交清单先在终端给出。
+    if (/\S/.test(commits.out)) {
+        log.info("待审阅的远程提交:");
+
+        for (const line of commits.out.trimEnd().split("\n")) {
+            log.info(`  ${line}`);
+        }
+    }
+
+    if (reviewWithVsCode(["-C", mirror, base, sha])) {
+        return;
+    }
+
+    // 无图形环境(如纯 SSH)的兜底:写完整文本 diff 用默认编辑器打开。
     const diff = gitCapture(["-C", mirror, "diff", "--full-index", "--stat", "--patch", "--no-color", base, sha]);
 
-    if (!commits.ok || !diff.ok) {
+    if (!diff.ok) {
         die("无法生成远程快照审阅 diff,未签名也未推送");
     }
 

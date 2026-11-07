@@ -1886,7 +1886,16 @@ function commandEnv(extra) {
     LANG: "C.UTF-8",
     OMARCHY_PATH: process.env["OMARCHY_PATH"] ?? "/usr/share/omarchy"
   };
-  for (const name of ["XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"]) {
+  for (const name of [
+    "XDG_CONFIG_HOME",
+    "XDG_STATE_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_RUNTIME_DIR",
+    "WAYLAND_DISPLAY",
+    "DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS"
+  ]) {
     const value = process.env[name];
     if (value) {
       base[name] = value;
@@ -4686,38 +4695,6 @@ function readTextFile(path) {
   }
 }
 
-function editorCommand() {
-  const fromEnv = process.env["OMARSYNC_EDITOR"] ?? process.env["VISUAL"] ?? process.env["EDITOR"];
-  if (fromEnv && fromEnv.trim() !== "") {
-    return fromEnv.trim();
-  }
-  const launcher = resolveTool("omarchy-launch-editor");
-  if (launcher) {
-    return launcher;
-  }
-  return resolveTool("code");
-}
-function openInEditor(files) {
-  if (files.length === 0) {
-    return;
-  }
-  const editor = editorCommand();
-  const quoted = files.map((f) => `'${f.replaceAll("'", "'\\''")}'`).join(" ");
-  if (!editor) {
-    log.warn(`找不到可用的编辑器;手动查看: cat ${quoted}`);
-    return;
-  }
-  const child = spawn(`${editor} ${quoted}`, {
-    detached: true,
-    shell: true,
-    stdio: "ignore"
-  });
-  child.unref();
-  log.info(`已用编辑器打开审阅: ${editor}`);
-  log.info(`没弹出来?复制这条手动打开: ${editor} ${quoted}`);
-  log.info("想换编辑器(比如 VS Code): export OMARSYNC_EDITOR=code");
-}
-
 const PROXY_NAMES = [
   "http_proxy",
   "https_proxy",
@@ -4815,6 +4792,56 @@ function gitOut(args) {
     return void 0;
   }
   return out.trimEnd();
+}
+
+function vsCodeDiffAvailable() {
+  return resolveTool("code") !== void 0;
+}
+function reviewWithVsCode(args) {
+  const code = resolveTool("code");
+  if (!code) {
+    return false;
+  }
+  return git([
+    "-c",
+    `difftool.vscode.cmd=${code} --wait --diff $LOCAL $REMOTE`,
+    "difftool",
+    "--no-prompt",
+    "--tool=vscode",
+    ...args
+  ]);
+}
+
+function editorCommand() {
+  const fromEnv = process.env["OMARSYNC_EDITOR"] ?? process.env["VISUAL"] ?? process.env["EDITOR"];
+  if (fromEnv && fromEnv.trim() !== "") {
+    return fromEnv.trim();
+  }
+  const launcher = resolveTool("omarchy-launch-editor");
+  if (launcher) {
+    return launcher;
+  }
+  return resolveTool("code");
+}
+function openInEditor(files) {
+  if (files.length === 0) {
+    return;
+  }
+  const editor = editorCommand();
+  const quoted = files.map((f) => `'${f.replaceAll("'", "'\\''")}'`).join(" ");
+  if (!editor) {
+    log.warn(`找不到可用的编辑器;手动查看: cat ${quoted}`);
+    return;
+  }
+  const child = spawn(`${editor} ${quoted}`, {
+    detached: true,
+    shell: true,
+    stdio: "ignore"
+  });
+  child.unref();
+  log.info(`已用编辑器打开审阅: ${editor}`);
+  log.info(`没弹出来?复制这条手动打开: ${editor} ${quoted}`);
+  log.info("想换编辑器(比如 VS Code): export OMARSYNC_EDITOR=code");
 }
 
 function displayToken(value) {
@@ -7016,8 +7043,9 @@ function showChanges(mirror, sha) {
   } else {
     log.info("  (元数据无变化)");
   }
+  const reviewFiles = ["plugins.json", "packages/pacman.txt", "packages/flatpak.txt", "current/theme.name", "current/background"];
   let review = "";
-  for (const file of ["plugins.json", "packages/pacman.txt", "packages/flatpak.txt", "current/theme.name", "current/background"]) {
+  for (const file of reviewFiles) {
     const d = gitOut(["-C", mirror, "diff", "--color=never", applied, sha, "--", file]);
     if (d && /\S/.test(d)) {
       process.stdout.write(`${d}
@@ -7027,6 +7055,9 @@ function showChanges(mirror, sha) {
     }
   }
   if (review !== "") {
+    if (reviewWithVsCode(["-C", mirror, applied, sha, "--", ...reviewFiles])) {
+      return;
+    }
     const reviewFile = `${paths.stateDir}/pending-apply.diff`;
     writeFileSync(reviewFile, `自 ${applied} 到 ${sha} 的元数据更改
 
@@ -8592,8 +8623,12 @@ async function reviewMergedTree(mirror, reviewedCommit, reviewedTree, skipConfir
     writeFileSync(reviewFile, `===== 合并后的最终 diff =====
 ${finalDiff}
 `);
-    log.info(`合并改写了已确认的树。最终 diff 已写入 ${reviewFile}`);
-    openInEditor([reviewFile]);
+    if (reviewWithVsCode(["-C", mirror, reviewedTree, "HEAD"])) {
+      log.info("合并改写了已确认的树,已在 VS Code 左右对比中展示最终 diff");
+    } else {
+      log.info(`合并改写了已确认的树。最终 diff 已写入 ${reviewFile}`);
+      openInEditor([reviewFile]);
+    }
   } else {
     log.info("合并改写了已确认的树");
   }
@@ -8611,21 +8646,18 @@ ${finalDiff}
 function normalizedRemote(url) {
   return url.replace(/\/+$/, "").replace(/\.git$/, "");
 }
-function reviewWithVsCode(mirror, baseTree, selectedTree, hasMetaChanges) {
-  if (!resolveTool("code")) {
+function reviewPushDiff(mirror, baseTree, selectedTree, hasMetaChanges) {
+  if (!vsCodeDiffAvailable()) {
     return false;
   }
   log.info("正在用 VS Code 左右对比;关闭当前 diff 标签可继续下一个文件");
-  if (hasMetaChanges && !git(["-C", mirror, "difftool", "--no-prompt", "--tool=vscode", "--cached"])) {
+  if (hasMetaChanges && !reviewWithVsCode(["-C", mirror, "--cached"])) {
     return false;
   }
   if (baseTree !== selectedTree) {
-    return git([
+    return reviewWithVsCode([
       "--git-dir",
       historyRepo(),
-      "difftool",
-      "--no-prompt",
-      "--tool=vscode",
       baseTree,
       selectedTree,
       "--",
@@ -8764,7 +8796,7 @@ ${fileDiff}
       const reviewFile = `${paths.stateDir}/pending-push.diff`;
       writeFileSync(reviewFile, review);
       log.info(`完整 diff 已写入 ${reviewFile}`);
-      if (!skipConfirm && !reviewWithVsCode(mirror, baseTree, built.tree, /\S/.test(metaDiff))) {
+      if (!skipConfirm && !reviewPushDiff(mirror, baseTree, built.tree, /\S/.test(metaDiff))) {
         openInEditor([reviewFile]);
       }
     }
@@ -8865,8 +8897,20 @@ function reviewSnapshot(mirror, sha) {
   const base = ancestors.find((commit) => commitIsTrusted(mirror, commit)) ?? EMPTY_TREE;
   const range = base === EMPTY_TREE ? sha : `${base}..${sha}`;
   const commits = gitCapture(["-C", mirror, "log", "--format=%H %s", range]);
+  if (!commits.ok) {
+    die("无法读取远程提交历史,未签名也未推送");
+  }
+  if (/\S/.test(commits.out)) {
+    log.info("待审阅的远程提交:");
+    for (const line of commits.out.trimEnd().split("\n")) {
+      log.info(`  ${line}`);
+    }
+  }
+  if (reviewWithVsCode(["-C", mirror, base, sha])) {
+    return;
+  }
   const diff = gitCapture(["-C", mirror, "diff", "--full-index", "--stat", "--patch", "--no-color", base, sha]);
-  if (!commits.ok || !diff.ok) {
+  if (!diff.ok) {
     die("无法生成远程快照审阅 diff,未签名也未推送");
   }
   mkdirSync(paths.stateDir, { recursive: true });

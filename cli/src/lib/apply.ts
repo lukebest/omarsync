@@ -2,6 +2,7 @@ import { mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 
+import { reviewWithVsCode } from "./diff-review";
 import { openInEditor } from "./editor";
 import { capture, exists, isDir, isFile, isLink, mktempDir, realpath, resolveTool, rmrf } from "./exec";
 import { gitCapture, gitOut } from "./git";
@@ -547,11 +548,11 @@ export function showChanges(mirror: string, sha: string): void {
         log.info("  (元数据无变化)");
     }
 
-    // 关键文本文件给出完整 diff,必须能逐行看到改了什么;
-    // 同时汇总写进 pending-apply.diff 并用用户的编辑器打开审阅
+    // 关键文本文件给出完整 diff,必须能逐行看到改了什么。
+    const reviewFiles = ["plugins.json", "packages/pacman.txt", "packages/flatpak.txt", "current/theme.name", "current/background"];
     let review = "";
 
-    for (const file of ["plugins.json", "packages/pacman.txt", "packages/flatpak.txt", "current/theme.name", "current/background"]) {
+    for (const file of reviewFiles) {
         const d = gitOut(["-C", mirror, "diff", "--color=never", applied, sha, "--", file]);
 
         if (d && /\S/.test(d)) {
@@ -561,6 +562,11 @@ export function showChanges(mirror: string, sha: string): void {
     }
 
     if (review !== "") {
+        // 优先 VS Code 左右 Diff Editor;无图形环境(如纯 SSH)再回退文本 diff。
+        if (reviewWithVsCode(["-C", mirror, applied, sha, "--", ...reviewFiles])) {
+            return;
+        }
+
         const reviewFile = `${paths.stateDir}/pending-apply.diff`;
 
         writeFileSync(reviewFile, `自 ${applied} 到 ${sha} 的元数据更改\n\n${review}`);

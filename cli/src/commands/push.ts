@@ -1,8 +1,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 
+import { reviewWithVsCode, vsCodeDiffAvailable } from "../lib/diff-review";
 import { openInEditor } from "../lib/editor";
-import { isDir, mktempDir, resolveTool, rmrf } from "../lib/exec";
+import { isDir, mktempDir, rmrf } from "../lib/exec";
 import { git, gitCapture, gitOut } from "../lib/git";
 import { die, log, readTextFile } from "../lib/log";
 import { collectSelectedInto, exportLocalInto } from "../lib/meta";
@@ -101,8 +102,13 @@ async function reviewMergedTree(mirror: string, reviewedCommit: string, reviewed
         const reviewFile = `${paths.stateDir}/pending-push.diff`;
 
         writeFileSync(reviewFile, `===== 合并后的最终 diff =====\n${finalDiff}\n`);
-        log.info(`合并改写了已确认的树。最终 diff 已写入 ${reviewFile}`);
-        openInEditor([reviewFile]);
+
+        if (reviewWithVsCode(["-C", mirror, reviewedTree, "HEAD"])) {
+            log.info("合并改写了已确认的树,已在 VS Code 左右对比中展示最终 diff");
+        } else {
+            log.info(`合并改写了已确认的树。最终 diff 已写入 ${reviewFile}`);
+            openInEditor([reviewFile]);
+        }
     } else {
         log.info("合并改写了已确认的树");
     }
@@ -127,24 +133,21 @@ function normalizedRemote(url: string): string {
 }
 
 /** 用 VS Code 原生左右视图逐个审阅文件;关闭当前标签后继续下一个。 */
-function reviewWithVsCode(mirror: string, baseTree: string, selectedTree: string, hasMetaChanges: boolean): boolean {
-    if (!resolveTool("code")) {
+function reviewPushDiff(mirror: string, baseTree: string, selectedTree: string, hasMetaChanges: boolean): boolean {
+    if (!vsCodeDiffAvailable()) {
         return false;
     }
 
     log.info("正在用 VS Code 左右对比;关闭当前 diff 标签可继续下一个文件");
 
-    if (hasMetaChanges && !git(["-C", mirror, "difftool", "--no-prompt", "--tool=vscode", "--cached"])) {
+    if (hasMetaChanges && !reviewWithVsCode(["-C", mirror, "--cached"])) {
         return false;
     }
 
     if (baseTree !== selectedTree) {
-        return git([
+        return reviewWithVsCode([
             "--git-dir",
             mise.historyRepo(),
-            "difftool",
-            "--no-prompt",
-            "--tool=vscode",
             baseTree,
             selectedTree,
             "--",
@@ -347,7 +350,7 @@ export async function executePush(skipConfirm = false): Promise<void> {
             writeFileSync(reviewFile, review);
             log.info(`完整 diff 已写入 ${reviewFile}`);
 
-            if (!skipConfirm && !reviewWithVsCode(mirror, baseTree, built.tree, /\S/.test(metaDiff))) {
+            if (!skipConfirm && !reviewPushDiff(mirror, baseTree, built.tree, /\S/.test(metaDiff))) {
                 openInEditor([reviewFile]);
             }
         }
