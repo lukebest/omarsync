@@ -1,9 +1,9 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { capture, isDir, resolveTool } from "./exec";
-import { gitOut } from "./git";
-import { die, log } from "./log";
+import { gitCapture, gitOut } from "./git";
+import { die, log, readTextFile } from "./log";
 import { assignments } from "./proxy";
 import { isFullSha } from "./trust";
 
@@ -43,6 +43,7 @@ export interface MiseStatus {
             readonly origin?: unknown;
             readonly branch?: unknown;
         };
+        readonly unsaved?: unknown;
     };
     readonly [key: string]: unknown;
 }
@@ -127,6 +128,36 @@ export function save(): boolean | undefined {
     }
 
     return !out.includes("nothing changed");
+}
+
+/** 自最新检查点以来尚未保存的路径;只读,绝不创建检查点。字段不可用时返回 undefined */
+export function unsavedFiles(): string[] | undefined {
+    const unsaved = status()?.history?.unsaved;
+
+    if (!Array.isArray(unsaved)) {
+        return undefined;
+    }
+
+    const files: string[] = [];
+
+    for (const item of unsaved) {
+        if (typeof item === "string") {
+            files.push(item);
+        } else if (item && typeof item === "object" && "path" in item && typeof item.path === "string") {
+            files.push(item.path);
+        }
+    }
+
+    return files;
+}
+
+/** 两个已保存快照之间的完整文件差异;任一不是对象 id 时返回空串 */
+export function snapshotDiff(from: string, to: string): string {
+    if (!isFullSha(from) || !isFullSha(to) || !isDir(historyRepo())) {
+        return "";
+    }
+
+    return gitCapture(["--git-dir", historyRepo(), "diff", "--stat", "--patch", "--no-color", from, to]).out;
 }
 
 /** 最新检查点的 tree.snapshot(git 树哈希,跨机稳定);失败返回 undefined */
@@ -250,8 +281,92 @@ export interface PullOptions {
     readonly takeRemoteAll?: boolean;
 }
 
-function historyRepo(): string {
+export function historyRepo(): string {
     return join(homedir(), ".local", "state", "mise", "history", "repo.git");
+}
+
+export interface SnapshotEntry {
+    readonly mode: string;
+    readonly blob: string;
+}
+
+/** 根树里一个路径的 mode/blob;路径使用 home/... 形式 */
+export function snapshotEntry(tree: string, path: string): SnapshotEntry | undefined {
+    if (!isFullSha(tree)) {
+        return undefined;
+    }
+
+    const out = gitOut(["--git-dir", historyRepo(), "ls-tree", "-z", tree, "--", path]);
+
+    if (!out) {
+        return undefined;
+    }
+
+    const match = /^(\d+) \w+ ([0-9a-f]{40})\t(.+)$/.exec(out.replace(/\0$/, ""));
+
+    if (!match || match[3] !== path) {
+        return undefined;
+    }
+
+    return { mode: match[1]!, blob: match[2]! };
+}
+
+export interface SnapshotChange {
+    readonly path: string;
+    readonly status: "A" | "M" | "D";
+}
+
+/** 两棵 mise 根树之间的文件差异;路径为 home/... */
+export function snapshotChangedPaths(baseTree: string, localTree: string): SnapshotChange[] {
+    if (!isFullSha(baseTree) || !isFullSha(localTree)) {
+        return [];
+    }
+
+    const out = gitOut([
+        "--git-dir",
+        historyRepo(),
+        "diff",
+        "--name-status",
+        "--no-renames",
+        baseTree,
+        localTree,
+        "--",
+        "home",
+    ]);
+
+    if (!out) {
+        return [];
+    }
+
+    const changes: SnapshotChange[] = [];
+
+    for (const line of out.split("\n")) {
+        const [status, path] = line.split("\t");
+
+        if (!status || !path || !path.startsWith("home/")) {
+            continue;
+        }
+
+        changes.push({ path, status: status === "A" ? "A" : status === "D" ? "D" : "M" });
+    }
+
+    return changes;
+}
+
+/** 空根树(不需要写对象;git 能直接给出哈希) */
+export function emptySnapshot(): string | undefined {
+    return gitOut(["--git-dir", historyRepo(), "hash-object", "-t", "tree", "/dev/null"]);
+}
+
+/** 根树里的全部路径(home/... 与 .mise-history/...) */
+export function snapshotPaths(tree: string): string[] {
+    if (!isFullSha(tree)) {
+        return [];
+    }
+
+    const out = gitOut(["--git-dir", historyRepo(), "ls-tree", "-r", "--name-only", tree]);
+
+    return out ? out.split("\n").filter((line) => line !== "") : [];
 }
 
 /** 签名提交里的 miseHead 是检查点的 tree。找到对应的 commit,供 rollback 钉住。 */
@@ -275,6 +390,50 @@ export function commitForSnapshot(snapshot: string): string | undefined {
     }
 
     return undefined;
+}
+
+/** 该提交是否已经作为 checkpoint 导入 mise 本地索引。
+ *  只 fetch 到 Git 对象库还不够,rollback 只认索引里的检查点。 */
+export function checkpointIndexed(commit: string): boolean {
+    if (!isFullSha(commit)) {
+        return false;
+    }
+
+    const { ok, out } = miseCapture(["history", "ls", "-J", "-n", "0"]);
+
+    if (!ok) {
+        return false;
+    }
+
+    try {
+        const rows = JSON.parse(out) as { commit?: unknown }[];
+
+        return Array.isArray(rows) && rows.some((row) => row.commit === commit);
+    } catch {
+        return false;
+    }
+}
+
+/** 最近一次 fetch 得到的远程 dotfiles 尖端对应的文件树 */
+export function upstreamSnapshot(): string | undefined {
+    const raw = readTextFile(`${dirname(historyRepo())}/sync.json`);
+
+    if (!raw) {
+        return undefined;
+    }
+
+    try {
+        const data = JSON.parse(raw) as { upstream_commit?: unknown };
+        const commit = typeof data.upstream_commit === "string" ? data.upstream_commit : undefined;
+
+        if (!isFullSha(commit)) {
+            return undefined;
+        }
+
+        return gitOut(["--git-dir", historyRepo(), "rev-parse", "--verify", "--quiet", `${commit}^{tree}`]);
+    } catch {
+        return undefined;
+    }
 }
 
 /** 把跟踪文件恢复成某个检查点。dryRun 只打印计划。 */

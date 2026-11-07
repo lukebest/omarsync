@@ -9,8 +9,10 @@ import { executeLogin } from "./commands/login";
 import { executeMigrate } from "./commands/migrate";
 import { executePull } from "./commands/pull";
 import { executePush } from "./commands/push";
+import { executeRepairRemote } from "./commands/repair-remote";
 import { executeSetup } from "./commands/setup";
 import { executeStatus } from "./commands/status";
+import { executeTrustSigner } from "./commands/trust-signer";
 import { die } from "./lib/log";
 import { ensureLocalScope } from "./lib/scope";
 import { cmdTrustKey } from "./lib/trust";
@@ -113,6 +115,21 @@ cli.addCommand({
 });
 
 cli.addCommand({
+    name: "repair-remote",
+    description: "审阅旧的不可信远程快照,确认后补一个树不变的签名提交并推送",
+    options: [
+        {
+            name: "commit",
+            type: String,
+            description: "要审阅的当前远程尖端40位commit sha(必填)",
+        },
+    ],
+    execute: async ({ options }) => {
+        await executeRepairRemote(typeof options["commit"] === "string" ? options["commit"] : undefined);
+    },
+});
+
+cli.addCommand({
     name: "migrate",
     description: "老格式迁移:当前提交须已可信签名,确认剩余文件后才删除 home/ 并签名推送",
     execute: async () => {
@@ -166,6 +183,29 @@ cli.addCommand({
     description: "列出 mise dot 同步冲突,用本机编辑器打开审阅",
     execute: () => {
         executeConflicts();
+    },
+});
+
+cli.addCommand({
+    name: "trust-signer",
+    description: "从远程提交自带的签名提取公钥,核对指纹后加入信任名单(无需手动拷贝公钥)",
+    options: [
+        {
+            name: "commit",
+            type: String,
+            description: "远程尖端的 40 位 commit sha(必填)",
+        },
+        {
+            name: "yes",
+            type: Boolean,
+            description: "跳过指纹确认(仅供自动化)",
+        },
+    ],
+    execute: async ({ options }) => {
+        await executeTrustSigner(
+            typeof options["commit"] === "string" ? options["commit"] : undefined,
+            options["yes"] === true,
+        );
     },
 });
 

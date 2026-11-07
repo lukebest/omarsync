@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { capture, isFile, resolveTool, run } from "./exec";
 import { die, log, readTextFile } from "./log";
 import { omarchy } from "./omarchy";
+import { loadPushIgnore } from "./push-ignore";
 
 // pacman / AUR / Flatpak 清单的导出与安装。1:1 移植自 src/packages.lua。
 
@@ -36,14 +37,22 @@ function flatpakCapture(args: readonly string[]): { ok: boolean; out: string } {
     return { ok: result.code === 0, out: result.stdout };
 }
 
+function filterIgnoredPackages(text: string, ignored: ReadonlySet<string>): string {
+    return text
+        .split("\n")
+        .filter((line) => !ignored.has(line.trim()))
+        .join("\n");
+}
+
 export function exportPackages(dest: string): void {
     mkdirSync(`${dest}/packages`, { recursive: true });
 
     const pacman = pacmanBin();
+    const ignored = loadPushIgnore().packages;
 
     if (pacman) {
-        writeFileSync(`${dest}/packages/pacman.txt`, capture(pacman, ["-Qqen"]).stdout);
-        writeFileSync(`${dest}/packages/aur.txt`, capture(pacman, ["-Qqem"]).stdout);
+        writeFileSync(`${dest}/packages/pacman.txt`, filterIgnoredPackages(capture(pacman, ["-Qqen"]).stdout, ignored));
+        writeFileSync(`${dest}/packages/aur.txt`, filterIgnoredPackages(capture(pacman, ["-Qqem"]).stdout, ignored));
     } else {
         writeFileSync(`${dest}/packages/pacman.txt`, "");
         writeFileSync(`${dest}/packages/aur.txt`, "");
@@ -77,6 +86,7 @@ export function exportFlatpaks(dest: string): void {
     }
 
     const lines: string[] = [];
+    const ignored = loadPushIgnore().packages;
 
     for (const line of flatpakCapture(["list", "--user", "--app", "--columns=application,origin,branch,active"]).out.split("\n")) {
         const match = /^(\S+)\s+(\S+)\s+(\S+)/.exec(line);
@@ -88,6 +98,10 @@ export function exportFlatpaks(dest: string): void {
         const [, app, origin, branch] = match;
 
         if (!/^[A-Za-z0-9._-]+$/.test(app!) || !/^[A-Za-z0-9._-]+$/.test(origin!) || !/^[A-Za-z0-9._-]+$/.test(branch!)) {
+            continue;
+        }
+
+        if (ignored.has(app!)) {
             continue;
         }
 
@@ -139,6 +153,7 @@ function pkgInstalled(pkg: string): boolean {
 function readPkgList(path: string): string[] {
     const data = readTextFile(path);
     const pkgs: string[] = [];
+    const ignored = loadPushIgnore().packages;
 
     if (!data) {
         return pkgs;
@@ -147,7 +162,7 @@ function readPkgList(path: string): string[] {
     for (const line of data.split("\n")) {
         const pkg = line.trim();
 
-        if (pkg === "" || pkg.startsWith("#")) {
+        if (pkg === "" || pkg.startsWith("#") || ignored.has(pkg)) {
             continue;
         }
 
@@ -213,6 +228,10 @@ export function installMissingFlatpaks(mirror: string): boolean {
 
         if (!/^[A-Za-z0-9._-]+$/.test(app!)) {
             die(`拒绝异常的 flatpak id: ${app}`);
+        }
+
+        if (loadPushIgnore().packages.has(app!)) {
+            continue;
         }
 
         if (!/^[A-Za-z0-9._-]+$/.test(origin!)) {

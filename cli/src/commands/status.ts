@@ -9,6 +9,7 @@ import { log, readTextFile } from "../lib/log";
 import { mirrorDirty } from "../lib/meta";
 import * as mise from "../lib/mise";
 import { configGet, paths } from "../lib/paths";
+import { loadPushIgnore, pathIgnored } from "../lib/push-ignore";
 import { dotBranch, dotRepoName } from "../lib/omarchy";
 import { commitSignatureState, firstApplyAvailable, isFullSha, trustedKeysPresent } from "../lib/trust";
 import { displayTime, displayToken } from "../lib/util";
@@ -73,14 +74,26 @@ function readCounts(mirror: string, branch: string): [number, number, string] | 
         return [0, 0, ""];
     }
 
+    // 签名修复或空提交会改变提交 id,但文件树没变;这种差异不需要 apply 或 push。
+    const headTree = gitOut(["-C", mirror, "rev-parse", "--verify", `${head}^{tree}`]);
+    const remoteTree = gitOut(["-C", mirror, "rev-parse", "--verify", `${sha}^{tree}`]);
+
+    if (headTree && remoteTree && headTree === remoteTree) {
+        return [0, 0, sha];
+    }
+
     const behind = Number(gitOut(["-C", mirror, "rev-list", "--count", `HEAD..${sha}`]) ?? 0);
     const ahead = Number(gitOut(["-C", mirror, "rev-list", "--count", `${sha}..HEAD`]) ?? 0);
 
     return [behind, ahead, sha];
 }
 
-/** 是否有其他 omarsync 进程在跑(flock 探测) */
+/** 是否有其他 omarsync 进程在跑(flock 探测);持锁进程刷新自身状态时不算其他进程 */
 function isRunning(): boolean {
+    if (process.env["OMARSYNC_LOCK_HELD"] === "1") {
+        return false;
+    }
+
     const flock = resolveTool("flock");
 
     if (!flock) {
@@ -92,13 +105,22 @@ function isRunning(): boolean {
     return !run(flock, ["-n", paths.lockFile, "-c", "true"]);
 }
 
-/** mise 侧是否有改动:跑一次 save(无变化是幂等 no-op),看是否产生新检查点 */
+/** mise 侧是否有未保存改动。只读查询,绝不能在 status 里调用 save。 */
 function miseDirty(): boolean {
     if (!mise.available() || !mise.featureOk()) {
         return false;
     }
 
-    return mise.save() === true;
+    const unsaved = mise.unsavedFiles();
+
+    if (unsaved !== undefined) {
+        const ignored = loadPushIgnore();
+
+        return unsaved.some((name) => !pathIgnored(ignored, name));
+    }
+
+    // 旧版 mise 没有 history.unsaved 字段时退回只读 diff。
+    return /\S/.test(mise.diff().out.replace(/^mise files: all files are applied\s*$/m, ""));
 }
 
 /** 最近一次 mise 检查点改动的文件(历史仓库里路径带 home/ 前缀,剥掉) */
@@ -184,7 +206,13 @@ function collect(): Status {
                 dirty = miseDirty();
 
                 if (dirty) {
-                    st.changedFiles = changedFiles();
+                    const unsaved = mise.unsavedFiles();
+                    const ignored = loadPushIgnore();
+                    const visible = (unsaved ?? []).filter((name) => !pathIgnored(ignored, name));
+
+                    st.changedFiles = visible.length > 0
+                        ? visible.map((name) => name.replace(/^~\//, "")).slice(0, 30)
+                        : changedFiles();
                 }
             }
 

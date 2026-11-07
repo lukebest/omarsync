@@ -1,9 +1,8 @@
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 
 import { isDir } from "../lib/exec";
 import { gh, ghCapture, ghInstalled, ghLoggedIn, githubUser } from "../lib/gh";
+import { removeRemoteIgnoredPaths, restoreIgnoredPaths, stashIgnoredPaths } from "../lib/ignored-files";
 import { git, gitOut } from "../lib/git";
 import { die, log, readTextFile } from "../lib/log";
 import * as mise from "../lib/mise";
@@ -43,19 +42,7 @@ export function ensureDotfilesRepo(): void {
         return;
     }
 
-    let connected = mise.originSet(url, branch);
-
-    if (!connected.ok && connected.out.includes("has no branch")) {
-        const history = join(homedir(), ".local/state/mise/history/repo.git");
-
-        if (isDir(history)) {
-            log.info(`从本机 mise 历史创建分支 ${branch}`);
-
-            if (git(["--git-dir", history, "push", url, `HEAD:refs/heads/${branch}`])) {
-                connected = mise.originSet(url, branch);
-            }
-        }
-    }
+    const connected = mise.originSet(url, branch);
 
     if (!connected.ok) {
         log.warn(`无法连接 mise dot origin ${url}`);
@@ -70,11 +57,24 @@ export function ensureDotfilesRepo(): void {
     log.info(`已连接 mise dot origin ${url} 分支 ${branch}`);
 
     if (mise.incomingPending()) {
-        // 接收方:直接采用远程历史(含远程声明的 track 条目)
-        const pull = mise.pull({ takeRemoteAll: true });
+        // 接收方:直接采用远程历史(含远程声明的 track 条目);
+        // push-ignore 是双向忽略,adopt 期间也不能覆盖本机 ignored 文件。
+        const stash = stashIgnoredPaths();
 
-        if (!pull.ok) {
-            log.warn(`mise adopt pull 失败: ${pull.out}`);
+        try {
+            const pull = mise.pull({ takeRemoteAll: true });
+
+            if (!pull.ok) {
+                log.warn(`mise adopt pull 失败: ${pull.out}`);
+            } else {
+                const snapshot = mise.headSnapshot();
+
+                if (snapshot) {
+                    removeRemoteIgnoredPaths(stash, snapshot);
+                }
+            }
+        } finally {
+            restoreIgnoredPaths(stash);
         }
     } else {
         // 第一台机器(空分支):从 scope 建立跟踪

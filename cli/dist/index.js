@@ -2,11 +2,12 @@
 import { createRequire } from 'node:module';
 import { a as a$2, u, b as b$2, h as h$1, i as i$1, c as c$1, g, l, d, o, A as A$1, r as r$1, e as c$2, f as g$1, j as b$3, S as S$1, R as R$4, z as z$2, k as h$2, y, m, B as B$3, F as F$1, n as a$3, s as s$1, E as E$2, x as x$1, p as l$1, q as d$1, L as L$2, O as O$1, H as H$1, K as K$4, T, G as G$2, t as f, M as M$1, w, v as k$1, C as j$2, D as t$1 } from './packem_shared/index.server-iAND-ZxX.js';
 import { spawnSync, spawn } from 'node:child_process';
-import { statSync, accessSync, constants, existsSync, lstatSync, mkdtempSync, rmSync, realpathSync, readFileSync, mkdirSync, appendFileSync, writeFileSync, chmodSync, unlinkSync, copyFileSync, readdirSync, symlinkSync } from 'node:fs';
+import { statSync, accessSync, constants, mkdtempSync, rmSync, existsSync, lstatSync, realpathSync, readFileSync, mkdirSync, appendFileSync, writeFileSync, chmodSync, unlinkSync, copyFileSync, readdirSync, symlinkSync, readlinkSync, cpSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, matchesGlob } from 'node:path';
 import { y as yC, W as W$3 } from './packem_shared/interact-Bvij7loV.js';
 import * as readline from 'node:readline';
+import { isDeepStrictEqual } from 'node:util';
 
 const s = 16;
 const t = 32;
@@ -1865,10 +1866,11 @@ function resolveTool(name) {
   }
   return void 0;
 }
-function capture(binary, args, env = []) {
+function capture(binary, args, env = [], input) {
   const result = spawnSync(binary, [...args], {
     env: commandEnv(env),
     encoding: "utf8",
+    input,
     maxBuffer: 64 * 1024 * 1024
   });
   return {
@@ -1881,8 +1883,24 @@ function commandEnv(extra) {
   const base = {
     HOME: process.env["HOME"] ?? "",
     PATH: TRUSTED_DIRS.join(":"),
-    LANG: "C.UTF-8"
+    LANG: "C.UTF-8",
+    OMARCHY_PATH: process.env["OMARCHY_PATH"] ?? "/usr/share/omarchy"
   };
+  for (const name of [
+    "XDG_CONFIG_HOME",
+    "XDG_STATE_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_RUNTIME_DIR",
+    "WAYLAND_DISPLAY",
+    "DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS"
+  ]) {
+    const value = process.env[name];
+    if (value) {
+      base[name] = value;
+    }
+  }
   for (const entry of extra) {
     const eq = entry.indexOf("=");
     if (eq > 0) {
@@ -4600,22 +4618,23 @@ ${Qr(E, { ...this.#s, filterStacktrace: L, hideErrorCauseCodeView: true, hideErr
   }
 }
 
-const HOME$4 = homedir();
+const HOME$5 = homedir();
 const paths = {
   /** 本机配置目录(信任文件、scope、plugins-skip 都在这,永不上传) */
-  configDir: join(HOME$4, ".config", "omarsync"),
-  configFile: join(HOME$4, ".config", "omarsync", "config"),
+  configDir: join(HOME$5, ".config", "omarsync"),
+  configFile: join(HOME$5, ".config", "omarsync", "config"),
   /** 状态目录(镜像、备份、applied 印章、last.log) */
-  stateDir: join(HOME$4, ".local", "state", "omarsync"),
-  mirrorDir: join(HOME$4, ".local", "state", "omarsync", "repo"),
-  backupDir: join(HOME$4, ".local", "state", "omarsync", "backup"),
-  scopeFile: join(HOME$4, ".config", "omarsync", "scope"),
-  pluginsSkipFile: join(HOME$4, ".config", "omarsync", "plugins-skip"),
-  trustedKeysFile: join(HOME$4, ".config", "omarsync", "trusted-keys"),
-  appliedStamp: join(HOME$4, ".local", "state", "omarsync", "applied"),
-  lastLog: join(HOME$4, ".local", "state", "omarsync", "last.log"),
-  lockFile: join(HOME$4, ".local", "state", "omarsync", "omarsync.lock"),
-  statusJson: join(HOME$4, ".local", "state", "omarsync", "status.json")
+  stateDir: join(HOME$5, ".local", "state", "omarsync"),
+  mirrorDir: join(HOME$5, ".local", "state", "omarsync", "repo"),
+  backupDir: join(HOME$5, ".local", "state", "omarsync", "backup"),
+  scopeFile: join(HOME$5, ".config", "omarsync", "scope"),
+  pluginsSkipFile: join(HOME$5, ".config", "omarsync", "plugins-skip"),
+  pushIgnoreFile: join(HOME$5, ".config", "omarsync", "push-ignore"),
+  trustedKeysFile: join(HOME$5, ".config", "omarsync", "trusted-keys"),
+  appliedStamp: join(HOME$5, ".local", "state", "omarsync", "applied"),
+  lastLog: join(HOME$5, ".local", "state", "omarsync", "last.log"),
+  lockFile: join(HOME$5, ".local", "state", "omarsync", "omarsync.lock"),
+  statusJson: join(HOME$5, ".local", "state", "omarsync", "status.json")
 };
 function configGet(key, readFile) {
   const data = readFile(paths.configFile);
@@ -4674,38 +4693,6 @@ function readTextFile(path) {
   } catch {
     return void 0;
   }
-}
-
-function editorCommand() {
-  const fromEnv = process.env["OMARSYNC_EDITOR"] ?? process.env["VISUAL"] ?? process.env["EDITOR"];
-  if (fromEnv && fromEnv.trim() !== "") {
-    return fromEnv.trim();
-  }
-  const launcher = resolveTool("omarchy-launch-editor");
-  if (launcher) {
-    return launcher;
-  }
-  return resolveTool("code");
-}
-function openInEditor(files) {
-  if (files.length === 0) {
-    return;
-  }
-  const editor = editorCommand();
-  const quoted = files.map((f) => `'${f.replaceAll("'", "'\\''")}'`).join(" ");
-  if (!editor) {
-    log.warn(`找不到可用的编辑器;手动查看: cat ${quoted}`);
-    return;
-  }
-  const child = spawn(`${editor} ${quoted}`, {
-    detached: true,
-    shell: true,
-    stdio: "ignore"
-  });
-  child.unref();
-  log.info(`已用编辑器打开审阅: ${editor}`);
-  log.info(`没弹出来?复制这条手动打开: ${editor} ${quoted}`);
-  log.info("想换编辑器(比如 VS Code): export OMARSYNC_EDITOR=code");
 }
 
 const PROXY_NAMES = [
@@ -4784,12 +4771,87 @@ function gitCapture(args) {
   const result = capture(gitBin(), [...baseArgs(), ...args], assignments());
   return { ok: result.code === 0, code: result.code, out: result.stdout };
 }
+function gitCaptureDetailed(args) {
+  const result = capture(gitBin(), [...baseArgs(), ...args], assignments());
+  return { ok: result.code === 0, code: result.code, stdout: result.stdout, stderr: result.stderr };
+}
+function gitCaptureEnv(args, extraEnv) {
+  const result = capture(gitBin(), [...baseArgs(), ...args], [...assignments(), ...extraEnv]);
+  return { ok: result.code === 0, code: result.code, out: result.stdout };
+}
+function gitCaptureInputEnv(args, extraEnv, input) {
+  const result = capture(gitBin(), [...baseArgs(), ...args], [...assignments(), ...extraEnv], input);
+  return { ok: result.code === 0, code: result.code, out: result.stdout };
+}
+function gitOutEnv(args, extraEnv) {
+  const { ok, out } = gitCaptureEnv(args, extraEnv);
+  if (!ok) {
+    return void 0;
+  }
+  return out.trimEnd();
+}
 function gitOut(args) {
   const { ok, out } = gitCapture(args);
   if (!ok) {
     return void 0;
   }
   return out.trimEnd();
+}
+
+function vsCodeDiffAvailable() {
+  return resolveTool("code") !== void 0;
+}
+function reviewWithVsCode(args) {
+  const code = resolveTool("code");
+  if (!code) {
+    return false;
+  }
+  const result = gitCaptureDetailed([
+    "-c",
+    `difftool.vscode.cmd=${code} --wait --diff $LOCAL $REMOTE`,
+    "difftool",
+    "--no-prompt",
+    "--tool=vscode",
+    ...args
+  ]);
+  if (result.ok) {
+    return true;
+  }
+  const reason = result.stderr.trim() || result.stdout.trim() || `git difftool 退出码 ${result.code}`;
+  log.warn(`VS Code 左右对比没有启动,回退到文本 diff: ${reason}`);
+  return false;
+}
+
+function editorCommand() {
+  const fromEnv = process.env["OMARSYNC_EDITOR"] ?? process.env["VISUAL"] ?? process.env["EDITOR"];
+  if (fromEnv && fromEnv.trim() !== "") {
+    return fromEnv.trim();
+  }
+  const launcher = resolveTool("omarchy-launch-editor");
+  if (launcher) {
+    return launcher;
+  }
+  return resolveTool("code");
+}
+function openInEditor(files) {
+  if (files.length === 0) {
+    return;
+  }
+  const editor = editorCommand();
+  const quoted = files.map((f) => `'${f.replaceAll("'", "'\\''")}'`).join(" ");
+  if (!editor) {
+    log.warn(`找不到可用的编辑器;手动查看: cat ${quoted}`);
+    return;
+  }
+  const child = spawn(`${editor} ${quoted}`, {
+    detached: true,
+    shell: true,
+    stdio: "ignore"
+  });
+  child.unref();
+  log.info(`已用编辑器打开审阅: ${editor}`);
+  log.info(`没弹出来?复制这条手动打开: ${editor} ${quoted}`);
+  log.info("想换编辑器(比如 VS Code): export OMARSYNC_EDITOR=code");
 }
 
 function displayToken(value) {
@@ -5050,27 +5112,24 @@ function acceptFirstApply(mirror, sha) {
   log.info(`本机首次应用;提交 ${sha} 未签名`);
   log.info("之后的 apply 需要可信签名");
 }
-async function trustSignerOfCommit(mirror, sha, allowPrompt) {
+async function trustRemoteSigner(mirror, sha, allowPrompt) {
   const pub = signaturePubkeyLine(mirror, sha);
   const fp = pub ? fingerprintOfPubkeyLine(pub) : void 0;
-  if (trustedKeysPresent()) {
-    if (fp) {
-      die(`提交 ${sha} 由 ${fp} 签名,不在 ${paths.trustedKeysFile} 里。拒绝应用。`);
-    }
-    die(`提交 ${sha} 不是由 ${paths.trustedKeysFile} 里的密钥签名的。拒绝应用。`);
-  }
   if (!pub || !fp || !pubkeyVerifiesCommit(mirror, sha, pub)) {
-    die(`提交 ${sha} 未签名。拒绝应用。`);
+    die(`提交 ${sha} 未签名,或自带公钥验签失败。拒绝信任。`);
+  }
+  if (commitIsTrusted(mirror, sha)) {
+    log.info(`签名者 ${fp} 已在信任名单中,无需重复添加`);
+    return;
   }
   if (!allowPrompt) {
     if (stdinIsTty()) {
-      log.info("这台机器还没有信任过签名密钥");
-      log.info(`提交 ${sha} 由 ${fp} 签名`);
-      if (!await confirm("信任这把密钥并应用?")) {
+      log.info(`提交 ${sha} 的签名者指纹: ${fp}`);
+      if (!await confirm("确认信任这把密钥?")) {
         die("未信任该签名密钥");
       }
     } else {
-      die(`提交 ${sha} 由 ${fp} 签名,而本机还没信任过签名密钥。在终端里运行 apply 并确认,或加 --trust-signer。`);
+      die(`需要在终端里核对指纹 ${fp} 并确认,或加 --yes 跳过确认。`);
     }
   }
   rememberSigner(pub);
@@ -5213,6 +5272,7 @@ function ensurePushSigner() {
 }
 function requireTrustedRemoteTip(mirror, sha) {
   if (!commitIsTrusted(mirror, sha)) {
+    log.info(`如已确认这是你的快照,可审阅后补签名: omarsync repair-remote --commit ${sha}`);
     die(`远程提交 ${sha} 不是可信签名。拒绝合并,也不会为它签名。`);
   }
 }
@@ -5327,6 +5387,27 @@ function save() {
   }
   return !out.includes("nothing changed");
 }
+function unsavedFiles() {
+  const unsaved = status()?.history?.unsaved;
+  if (!Array.isArray(unsaved)) {
+    return void 0;
+  }
+  const files = [];
+  for (const item of unsaved) {
+    if (typeof item === "string") {
+      files.push(item);
+    } else if (item && typeof item === "object" && "path" in item && typeof item.path === "string") {
+      files.push(item.path);
+    }
+  }
+  return files;
+}
+function snapshotDiff(from, to) {
+  if (!isFullSha(from) || !isFullSha(to) || !isDir(historyRepo())) {
+    return "";
+  }
+  return gitCapture(["--git-dir", historyRepo(), "diff", "--stat", "--patch", "--no-color", from, to]).out;
+}
 function headSnapshot() {
   const { ok, out } = miseCapture(["history", "ls", "-J"]);
   if (!ok) {
@@ -5407,6 +5488,58 @@ function sync(fetchOnly) {
 function historyRepo() {
   return join(homedir(), ".local", "state", "mise", "history", "repo.git");
 }
+function snapshotEntry(tree, path) {
+  if (!isFullSha(tree)) {
+    return void 0;
+  }
+  const out = gitOut(["--git-dir", historyRepo(), "ls-tree", "-z", tree, "--", path]);
+  if (!out) {
+    return void 0;
+  }
+  const match = /^(\d+) \w+ ([0-9a-f]{40})\t(.+)$/.exec(out.replace(/\0$/, ""));
+  if (!match || match[3] !== path) {
+    return void 0;
+  }
+  return { mode: match[1], blob: match[2] };
+}
+function snapshotChangedPaths(baseTree, localTree) {
+  if (!isFullSha(baseTree) || !isFullSha(localTree)) {
+    return [];
+  }
+  const out = gitOut([
+    "--git-dir",
+    historyRepo(),
+    "diff",
+    "--name-status",
+    "--no-renames",
+    baseTree,
+    localTree,
+    "--",
+    "home"
+  ]);
+  if (!out) {
+    return [];
+  }
+  const changes = [];
+  for (const line of out.split("\n")) {
+    const [status2, path] = line.split("	");
+    if (!status2 || !path || !path.startsWith("home/")) {
+      continue;
+    }
+    changes.push({ path, status: status2 === "A" ? "A" : status2 === "D" ? "D" : "M" });
+  }
+  return changes;
+}
+function emptySnapshot() {
+  return gitOut(["--git-dir", historyRepo(), "hash-object", "-t", "tree", "/dev/null"]);
+}
+function snapshotPaths(tree) {
+  if (!isFullSha(tree)) {
+    return [];
+  }
+  const out = gitOut(["--git-dir", historyRepo(), "ls-tree", "-r", "--name-only", tree]);
+  return out ? out.split("\n").filter((line) => line !== "") : [];
+}
 function commitForSnapshot(snapshot) {
   if (!isFullSha(snapshot) || !isDir(historyRepo())) {
     return void 0;
@@ -5422,6 +5555,37 @@ function commitForSnapshot(snapshot) {
     }
   }
   return void 0;
+}
+function checkpointIndexed(commit) {
+  if (!isFullSha(commit)) {
+    return false;
+  }
+  const { ok, out } = miseCapture(["history", "ls", "-J", "-n", "0"]);
+  if (!ok) {
+    return false;
+  }
+  try {
+    const rows = JSON.parse(out);
+    return Array.isArray(rows) && rows.some((row) => row.commit === commit);
+  } catch {
+    return false;
+  }
+}
+function upstreamSnapshot() {
+  const raw = readTextFile(`${dirname(historyRepo())}/sync.json`);
+  if (!raw) {
+    return void 0;
+  }
+  try {
+    const data = JSON.parse(raw);
+    const commit = typeof data.upstream_commit === "string" ? data.upstream_commit : void 0;
+    if (!isFullSha(commit)) {
+      return void 0;
+    }
+    return gitOut(["--git-dir", historyRepo(), "rev-parse", "--verify", "--quiet", `${commit}^{tree}`]);
+  } catch {
+    return void 0;
+  }
 }
 function rollbackTo(commit, dryRun = false) {
   const args = ["rollback", "--to", `commit:${commit}`, "--all", "-y"];
@@ -5456,6 +5620,138 @@ function incomingPending() {
   }
   const n = /(\d+)\s+incoming/.exec(out)?.[1];
   return n !== void 0 && n !== "0";
+}
+
+const DEFAULT_PUSH_IGNORE = `# Omarsync push-ignore（本机文件，永不上传）
+# 普通行：相对 $HOME 的路径或 glob
+# plugin:<id> 忽略插件；package:<name> 忽略包
+#
+# 默认：输入法插件会按机器重新生成这些文件
+.config/fcitx5/conf/classicui.conf
+.config/fcitx5/conf/notifications.conf
+.config/fcitx5/config
+.config/fcitx5/profile
+# 插件生成的绝对符号链接
+.local/bin/omarchy.ime
+.local/bin/ime-manager
+# 应用写入本机绝对路径的启动器
+.local/share/applications/claude-code-url-handler.desktop
+# 硬件/内核包由每台机器自己决定
+package:amd-ucode
+package:intel-ucode
+package:linux
+package:linux-headers
+package:linux-firmware
+package:linux-omarchy
+package:linux-omarchy-headers
+`;
+function ensurePushIgnore() {
+  const file = paths.pushIgnoreFile;
+  if (isFile(file)) {
+    return;
+  }
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, DEFAULT_PUSH_IGNORE);
+  } catch {
+  }
+}
+const PLUGIN_ID$1 = /^[A-Za-z0-9._-]+$/;
+const PACKAGE_NAME = /^[A-Za-z0-9@._+:~-]+$/;
+function normalizePath(raw, line) {
+  let path = raw.trim();
+  const home = homedir();
+  if (path.startsWith(`${home}/`)) {
+    path = path.slice(home.length + 1);
+  } else if (path.startsWith("/")) {
+    die(`push-ignore 第 ${line} 行必须相对于 $HOME`);
+  } else if (path.startsWith("~/")) {
+    path = path.slice(2);
+  } else if (path.startsWith("home/")) {
+    path = path.slice(5);
+  }
+  path = path.replace(/\/+$/, "");
+  if (path === "" || path.includes("\n") || path.includes("\0")) {
+    die(`push-ignore 第 ${line} 行不是有效路径`);
+  }
+  if (path.split("/").includes("..")) {
+    die(`push-ignore 第 ${line} 行不允许包含 '..'`);
+  }
+  return path;
+}
+function parsePushIgnore(text) {
+  const patterns = [];
+  const plugins = /* @__PURE__ */ new Set();
+  const packages = /* @__PURE__ */ new Set();
+  const lines = text.split("\n");
+  for (const [index, raw] of lines.entries()) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) {
+      continue;
+    }
+    const number = index + 1;
+    if (line.startsWith("plugin:")) {
+      const id = line.slice(7).trim();
+      if (!PLUGIN_ID$1.test(id)) {
+        die(`push-ignore 第 ${number} 行不是合法插件 id: ${id}`);
+      }
+      plugins.add(id);
+      continue;
+    }
+    if (line.startsWith("package:")) {
+      const name = line.slice(8).trim();
+      if (!PACKAGE_NAME.test(name)) {
+        die(`push-ignore 第 ${number} 行不是合法包名: ${name}`);
+      }
+      packages.add(name);
+      continue;
+    }
+    patterns.push(normalizePath(line, number));
+  }
+  return { patterns, plugins, packages };
+}
+function loadPushIgnore() {
+  const file = paths.pushIgnoreFile;
+  if (!isFile(file)) {
+    return { patterns: [], plugins: /* @__PURE__ */ new Set(), packages: /* @__PURE__ */ new Set() };
+  }
+  return parsePushIgnore(readTextFile(file) ?? "");
+}
+function normalizeCandidate(path) {
+  let value = path.trim();
+  if (value.startsWith("~/")) {
+    value = value.slice(2);
+  } else if (value.startsWith("home/")) {
+    value = value.slice(5);
+  } else if (value.startsWith(`${homedir()}/`)) {
+    value = value.slice(homedir().length + 1);
+  }
+  return value.replace(/^\/+/, "").replace(/\/+$/, "");
+}
+function hasGlob(pattern) {
+  return pattern.includes("*") || pattern.includes("?") || pattern.includes("[");
+}
+function pathIgnored(ignore, path) {
+  const rel = normalizeCandidate(path);
+  for (const pattern of ignore.patterns) {
+    if (matchesGlob(rel, pattern)) {
+      return true;
+    }
+    if (!hasGlob(pattern) && (rel === pattern || rel.startsWith(`${pattern}/`))) {
+      return true;
+    }
+  }
+  return false;
+}
+function pushIgnoreExcludes(ignore) {
+  const globs = /* @__PURE__ */ new Set();
+  for (const pattern of ignore.patterns) {
+    globs.add(`~/${pattern}`);
+    if (!hasGlob(pattern)) {
+      globs.add(`~/${pattern}/**`);
+    }
+  }
+  return [...globs];
 }
 
 const BANNED_PATHS = [
@@ -5581,6 +5877,9 @@ function desiredExcludes(entries) {
       }
     }
   }
+  for (const glob of pushIgnoreExcludes(loadPushIgnore())) {
+    set.add(glob);
+  }
   return set;
 }
 function reconcile(entries) {
@@ -5624,9 +5923,9 @@ function reconcile(entries) {
   }
 }
 
-const HOME$3 = homedir();
+const HOME$4 = homedir();
 function hooksSourceDir() {
-  return `${HOME$3}/.config/omarsync-hooks/post-apply.d`;
+  return `${HOME$4}/.config/omarsync-hooks/post-apply.d`;
 }
 function hookNames(dir) {
   if (!isDir(dir)) {
@@ -5698,29 +5997,36 @@ function refreshUserServices() {
   const wanted = readScope(paths.scopeFile).some(
     (entry) => entry.rel === ".config/systemd/user" || entry.rel.startsWith(".config/systemd/user/") || entry.rel === ".config/systemd"
   );
-  if (!wanted || !isDir(`${HOME$3}/.config/systemd/user`)) {
+  if (!wanted || !isDir(`${HOME$4}/.config/systemd/user`)) {
     return true;
   }
   const runtime = process.env["XDG_RUNTIME_DIR"];
   if (!runtime || runtime === "" || !exists(`${runtime}/systemd/private`)) {
     return true;
   }
-  let okAll = true;
+  const systemdEnv = [`XDG_RUNTIME_DIR=${runtime}`];
+  if (process.env["DBUS_SESSION_BUS_ADDRESS"]) {
+    systemdEnv.push(`DBUS_SESSION_BUS_ADDRESS=${process.env["DBUS_SESSION_BUS_ADDRESS"]}`);
+  }
   if (!run(systemctl, ["--user", "daemon-reload"])) {
     log.warn("systemctl --user daemon-reload 失败");
-    okAll = false;
   }
   const find = resolveTool("find");
-  const out = find ? capture(find, [`${HOME$3}/.config/systemd/user`, "-type", "l", "-path", "*.target.wants/*", "-printf", "%f\n"]).stdout : "";
+  const out = find ? capture(find, [`${HOME$4}/.config/systemd/user`, "-type", "l", "-path", "*.target.wants/*", "-printf", "%f\n"]).stdout : "";
   for (const unit of out.split("\n")) {
-    if (unit.endsWith(".service")) {
-      if (!run(systemctl, ["--user", "start", unit])) {
-        log.warn(`无法启动 ${unit}`);
-        okAll = false;
-      }
+    if (!unit.endsWith(".service")) {
+      continue;
+    }
+    const loadState = capture(systemctl, ["--user", "show", "-p", "LoadState", "--value", unit], systemdEnv).stdout.trim();
+    if (loadState === "not-found") {
+      log.warn(`跳过未安装的服务 ${unit}`);
+      continue;
+    }
+    if (!run(systemctl, ["--user", "start", unit])) {
+      log.warn(`无法启动 ${unit};配置已同步,可稍后手动处理`);
     }
   }
-  return okAll;
+  return true;
 }
 
 function ghInstalled() {
@@ -5872,12 +6178,16 @@ function flatpakCapture(args) {
   const result = capture(bin, args);
   return { ok: result.code === 0, out: result.stdout };
 }
+function filterIgnoredPackages(text, ignored) {
+  return text.split("\n").filter((line) => !ignored.has(line.trim())).join("\n");
+}
 function exportPackages(dest) {
   mkdirSync(`${dest}/packages`, { recursive: true });
   const pacman = pacmanBin();
+  const ignored = loadPushIgnore().packages;
   if (pacman) {
-    writeFileSync(`${dest}/packages/pacman.txt`, capture(pacman, ["-Qqen"]).stdout);
-    writeFileSync(`${dest}/packages/aur.txt`, capture(pacman, ["-Qqem"]).stdout);
+    writeFileSync(`${dest}/packages/pacman.txt`, filterIgnoredPackages(capture(pacman, ["-Qqen"]).stdout, ignored));
+    writeFileSync(`${dest}/packages/aur.txt`, filterIgnoredPackages(capture(pacman, ["-Qqem"]).stdout, ignored));
   } else {
     writeFileSync(`${dest}/packages/pacman.txt`, "");
     writeFileSync(`${dest}/packages/aur.txt`, "");
@@ -5901,6 +6211,7 @@ function exportFlatpaks(dest) {
     }
   }
   const lines = [];
+  const ignored = loadPushIgnore().packages;
   for (const line of flatpakCapture(["list", "--user", "--app", "--columns=application,origin,branch,active"]).out.split("\n")) {
     const match = /^(\S+)\s+(\S+)\s+(\S+)/.exec(line);
     if (!match) {
@@ -5908,6 +6219,9 @@ function exportFlatpaks(dest) {
     }
     const [, app, origin, branch] = match;
     if (!/^[A-Za-z0-9._-]+$/.test(app) || !/^[A-Za-z0-9._-]+$/.test(origin) || !/^[A-Za-z0-9._-]+$/.test(branch)) {
+      continue;
+    }
+    if (ignored.has(app)) {
       continue;
     }
     let commit = flatpakCapture(["info", "--user", "--show-commit", app]).out.trimEnd();
@@ -5944,12 +6258,13 @@ function pkgInstalled(pkg) {
 function readPkgList(path) {
   const data = readTextFile(path);
   const pkgs = [];
+  const ignored = loadPushIgnore().packages;
   if (!data) {
     return pkgs;
   }
   for (const line of data.split("\n")) {
     const pkg = line.trim();
-    if (pkg === "" || pkg.startsWith("#")) {
+    if (pkg === "" || pkg.startsWith("#") || ignored.has(pkg)) {
       continue;
     }
     if (!validPkgName(pkg)) {
@@ -5998,6 +6313,9 @@ function installMissingFlatpaks(mirror) {
     if (!/^[A-Za-z0-9._-]+$/.test(app)) {
       die(`拒绝异常的 flatpak id: ${app}`);
     }
+    if (loadPushIgnore().packages.has(app)) {
+      continue;
+    }
     if (!/^[A-Za-z0-9._-]+$/.test(origin)) {
       die(`拒绝异常的 flatpak origin: ${origin}`);
     }
@@ -6033,9 +6351,9 @@ function installMissingFlatpaks(mirror) {
   return !failed;
 }
 
-const HOME$2 = homedir();
+const HOME$3 = homedir();
 function pluginDir(id) {
-  return `${HOME$2}/.config/omarchy/plugins/${id}`;
+  return `${HOME$3}/.config/omarchy/plugins/${id}`;
 }
 function validPluginId(id) {
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) && !id.includes("..") && !id.startsWith("omarchy.");
@@ -6053,6 +6371,9 @@ function skipSet() {
     if (id !== "" && !id.startsWith("#")) {
       set.add(id);
     }
+  }
+  for (const id of loadPushIgnore().plugins) {
+    set.add(id);
   }
   return set;
 }
@@ -6175,6 +6496,10 @@ function installMissingPlugins(mirror, allowExec) {
     die("plugins.json 必须是数组");
   }
   const skip = skipSet();
+  const currentEnabled = new Set(
+    (listPlugins() ?? []).filter((row) => row.enabled === true && typeof row.id === "string").map((row) => row.id)
+  );
+  const toEnable = /* @__PURE__ */ new Set();
   let failed = false;
   let installedAny = false;
   for (const row of data) {
@@ -6200,6 +6525,9 @@ function installMissingPlugins(mirror, allowExec) {
         if (head !== rev) {
           log.warn(`插件 ${id} 当前在 ${head ?? "unknown"},快照记录 ${rev};保持不动`);
         }
+      }
+      if (enabled && !currentEnabled.has(id)) {
+        toEnable.add(id);
       }
       continue;
     }
@@ -6241,7 +6569,7 @@ function installMissingPlugins(mirror, allowExec) {
         failed = true;
         continue;
       }
-      mkdirSync(`${HOME$2}/.config/omarchy/plugins`, { recursive: true });
+      mkdirSync(`${HOME$3}/.config/omarchy/plugins`, { recursive: true });
       rmrf(dest);
       const mv = resolveTool("mv");
       if (!mv || capture(mv, [`${tmp}/plugin`, dest]).code !== 0) {
@@ -6253,8 +6581,8 @@ function installMissingPlugins(mirror, allowExec) {
       rmrf(tmp);
       log.info(`已安装插件 ${id}`);
       installedAny = true;
-      if (enabled && process.env["OMARSYNC_SKIP_LIVE"] !== "1" && !omarchy(["plugin", "enable", id])) {
-        log.warn(`启用插件 ${id} 失败`);
+      if (enabled) {
+        toEnable.add(id);
       }
     }
   }
@@ -6263,10 +6591,102 @@ function installMissingPlugins(mirror, allowExec) {
       log.warn("shell 插件重扫失败");
     }
   }
+  if (process.env["OMARSYNC_SKIP_LIVE"] !== "1") {
+    for (const id of toEnable) {
+      if (!omarchy(["plugin", "enable", id])) {
+        log.warn(`启用插件 ${id} 失败`);
+      }
+    }
+  }
   return !failed;
 }
 
+const HOME$2 = homedir();
+function walkIgnored(dir, rel, ignored, out) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.name === ".git" || entry.name === "node_modules") {
+      continue;
+    }
+    const child = rel === "" ? entry.name : `${rel}/${entry.name}`;
+    if (entry.isDirectory()) {
+      walkIgnored(`${dir}/${entry.name}`, child, ignored, out);
+    } else if (pathIgnored(ignored, child)) {
+      out.add(child);
+    }
+  }
+}
+function stashIgnoredPaths() {
+  const ignored = loadPushIgnore();
+  const root = mktempDir();
+  const ignoredFiles = /* @__PURE__ */ new Set();
+  const roots = new Set(trackedRels());
+  for (const entry of readScope(paths.scopeFile)) {
+    roots.add(entry.rel);
+  }
+  for (const relRoot of roots) {
+    const dir = `${HOME$2}/${relRoot}`;
+    if (isDir(dir)) {
+      walkIgnored(dir, relRoot, ignored, ignoredFiles);
+    }
+  }
+  for (const rel of ignoredFiles) {
+    const source = `${HOME$2}/${rel}`;
+    const target = `${root}/${rel}`;
+    try {
+      const stat = lstatSync(source);
+      mkdirSync(dirname(target), { recursive: true });
+      rmrf(target);
+      if (stat.isSymbolicLink()) {
+        symlinkSync(readlinkSync(source), target);
+      } else if (stat.isFile()) {
+        copyFileSync(source, target);
+        chmodSync(target, stat.mode);
+      }
+    } catch {
+    }
+  }
+  return { root, paths: ignoredFiles };
+}
+function restoreIgnoredPaths(stash) {
+  for (const rel of stash.paths) {
+    const source = `${stash.root}/${rel}`;
+    const target = `${HOME$2}/${rel}`;
+    try {
+      const stat = lstatSync(source);
+      mkdirSync(dirname(target), { recursive: true });
+      rmrf(target);
+      if (stat.isSymbolicLink()) {
+        symlinkSync(readlinkSync(source), target);
+      } else if (stat.isFile()) {
+        copyFileSync(source, target);
+        chmodSync(target, stat.mode);
+      }
+    } catch {
+    }
+  }
+  rmrf(stash.root);
+}
+function removeRemoteIgnoredPaths(stash, snapshot) {
+  const ignored = loadPushIgnore();
+  for (const path of snapshotPaths(snapshot)) {
+    if (!path.startsWith("home/")) {
+      continue;
+    }
+    const rel = path.slice(5);
+    if (pathIgnored(ignored, rel) && !stash.paths.has(rel)) {
+      rmrf(`${HOME$2}/${rel}`);
+    }
+  }
+}
+
 const HOME$1 = homedir();
+const EMPTY_TREE$1 = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 function pruneBackups() {
   const root = paths.backupDir;
   if (!isDir(root)) {
@@ -6307,23 +6727,55 @@ function backupTree() {
   }
   return dest;
 }
+function themeBackgroundCandidates(theme, rel) {
+  if (theme === "") {
+    return [];
+  }
+  return [
+    `${HOME$1}/.local/state/omarchy/current/theme/${rel}`,
+    `${HOME$1}/.config/omarchy/themes/${theme}/${rel}`,
+    `${process.env["OMARCHY_PATH"] ?? "/usr/share/omarchy"}/themes/${theme}/${rel}`
+  ];
+}
+function foreignThemeRelative(path) {
+  for (const marker of ["/.local/state/omarchy/current/theme/", "/.local/share/omarchy/themes/"]) {
+    const index = path.indexOf(marker);
+    if (index !== -1) {
+      const rest = path.slice(index + marker.length);
+      const slash = rest.indexOf("/");
+      return marker.includes("/current/theme/") ? rest : slash === -1 ? void 0 : rest.slice(slash + 1);
+    }
+  }
+  return void 0;
+}
+function resolveBackgroundTarget(theme, background) {
+  const candidates = [];
+  if (background.startsWith("rel:")) {
+    candidates.push(`${HOME$1}/.config/omarchy/backgrounds/${background.slice(5)}`);
+  } else if (background.startsWith("theme:")) {
+    candidates.push(...themeBackgroundCandidates(theme, background.slice(6)));
+  } else if (background.startsWith("abs:")) {
+    const absolute = background.slice(4);
+    candidates.push(absolute);
+    const rel = foreignThemeRelative(absolute);
+    if (rel !== void 0 && !isFile(absolute)) {
+      candidates.push(...themeBackgroundCandidates(theme, rel));
+    }
+  }
+  return candidates.find((path) => isFile(path)) ?? candidates[0] ?? "";
+}
 function applyCurrent(mirror, withExec) {
   const theme = (readTextFile(`${mirror}/current/theme.name`) ?? "").replaceAll(/\s+/g, "");
   const background = (readTextFile(`${mirror}/current/background`) ?? "").replaceAll(/\s+/g, "");
   const state = `${HOME$1}/.local/state/omarchy/current`;
-  let target = "";
-  if (background.startsWith("rel:")) {
-    target = `${HOME$1}/.config/omarchy/backgrounds/${background.slice(4)}`;
-  } else if (background.startsWith("abs:")) {
-    target = background.slice(4);
-  }
   if (process.env["OMARSYNC_SKIP_LIVE"] === "1") {
     mkdirSync(state, { recursive: true });
     if (theme !== "") {
       writeFileSync(`${state}/theme.name`, `${theme}
 `);
     }
-    if (target !== "" && exists(target)) {
+    const target = resolveBackgroundTarget(theme, background);
+    if (target !== "" && isFile(target)) {
       rmrf(`${state}/background`);
       symlinkSync(target, `${state}/background`);
     }
@@ -6343,16 +6795,16 @@ function applyCurrent(mirror, withExec) {
       failed = true;
     }
   }
-  if (target !== "") {
-    if (exists(target)) {
+  if (background !== "") {
+    const target = resolveBackgroundTarget(theme, background);
+    if (target !== "" && exists(target)) {
       log.info(`设置壁纸 ${target}`);
       if (!omarchy(["theme", "bg", "set", target])) {
         log.warn("设置壁纸失败");
         failed = true;
       }
     } else {
-      log.warn(`壁纸文件不存在: ${target}`);
-      failed = true;
+      log.warn(`壁纸文件不存在,保留当前壁纸: ${target}`);
     }
   }
   return !failed;
@@ -6466,8 +6918,8 @@ function signedMiseHead(mirror) {
   }
   try {
     const data = JSON.parse(raw);
-    const head = data.miseHead;
-    return isFullSha(typeof head === "string" ? head : void 0) ? head : void 0;
+    const head = typeof data.miseHead === "string" ? data.miseHead : void 0;
+    return isFullSha(head) ? head : void 0;
   } catch {
     return void 0;
   }
@@ -6481,10 +6933,28 @@ function syncDotfiles(mirror) {
     log.warn("签名提交没有 miseHead;拒绝应用可变的 dotfiles 分支");
     return false;
   }
-  const commit = commitForSnapshot(snapshot);
+  let commit = commitForSnapshot(snapshot);
   if (!commit) {
     log.warn(`已抓取的历史里没有签名的 miseHead ${snapshot};拒绝应用分支尖端`);
     return false;
+  }
+  if (!checkpointIndexed(commit)) {
+    const upstream = upstreamSnapshot();
+    if (upstream !== snapshot) {
+      log.warn("远程 dotfiles 尖端与签名快照不一致;拒绝导入可变的远端版本");
+      return false;
+    }
+    log.info("签名快照尚未导入 mise 历史;采用远程版本并解决本机冲突");
+    const pulled = pull({ takeRemoteAll: true });
+    if (!pulled.ok) {
+      log.warn(`mise pull 导入快照失败: ${pulled.out}`);
+      return false;
+    }
+    commit = commitForSnapshot(snapshot);
+    if (!commit || !checkpointIndexed(commit)) {
+      log.warn(`mise pull 后仍找不到 checkpoint ${snapshot}`);
+      return false;
+    }
   }
   log.info(`按签名的 miseHead ${snapshot} 恢复文件`);
   const rolled = rollbackTo(commit);
@@ -6501,7 +6971,19 @@ function applyMirror(mirror, withPackages, sha, withExec) {
   log.info(`已备份现有文件到 ${backup}`);
   let failed = false;
   const hooksStash = withExec ? void 0 : stashOmarchyHooks();
-  const filesOk = syncDotfiles(mirror);
+  const ignoredStash = stashIgnoredPaths();
+  let filesOk = false;
+  try {
+    filesOk = syncDotfiles(mirror);
+    if (filesOk) {
+      const snapshot = signedMiseHead(mirror);
+      if (snapshot) {
+        removeRemoteIgnoredPaths(ignoredStash, snapshot);
+      }
+    }
+  } finally {
+    restoreIgnoredPaths(ignoredStash);
+  }
   if (!filesOk) {
     failed = true;
   }
@@ -6542,26 +7024,31 @@ function applyMirror(mirror, withPackages, sha, withExec) {
 }
 function showChanges(mirror, sha) {
   const applied = (readTextFile(appliedStampFile()) ?? "").trim();
+  let base;
+  let firstApply = false;
   if (!isFullSha(applied)) {
-    log.info("没有应用过的 commit;这份快照将整体应用");
-    return;
-  }
-  if (applied === sha) {
+    base = EMPTY_TREE$1;
+    firstApply = true;
+    log.info("没有应用过的 commit;首次应用,下面展示完整快照供审阅");
+  } else if (applied === sha) {
     log.info("这台机器已经应用过这个 commit");
     return;
-  }
-  if (!gitCapture(["-C", mirror, "cat-file", "-e", `${applied}^{commit}`]).ok) {
+  } else if (!gitCapture(["-C", mirror, "cat-file", "-e", `${applied}^{commit}`]).ok) {
     log.info(`上次应用的 commit ${applied} 不在镜像里;无法 diff`);
     return;
+  } else {
+    base = applied;
+    log.info(`自上次应用的 commit ${applied.slice(0, 12)} 以来的更改:`);
   }
-  log.info(`自上次应用的 commit ${applied.slice(0, 12)} 以来的更改:`);
-  const logOut = gitOut(["-C", mirror, "log", "--oneline", "--no-decorate", `${applied}..${sha}`]);
-  if (logOut && /\S/.test(logOut)) {
-    for (const line of logOut.split("\n")) {
-      log.info(`  commit ${line}`);
+  if (!firstApply) {
+    const logOut = gitOut(["-C", mirror, "log", "--oneline", "--no-decorate", `${base}..${sha}`]);
+    if (logOut && /\S/.test(logOut)) {
+      for (const line of logOut.split("\n")) {
+        log.info(`  commit ${line}`);
+      }
     }
   }
-  const stat = gitOut(["-C", mirror, "diff", "--stat", applied, sha]);
+  const stat = gitOut(["-C", mirror, "diff", "--stat", base, sha]);
   if (stat && /\S/.test(stat)) {
     for (const line of stat.split("\n")) {
       log.info(`  ${line}`);
@@ -6569,9 +7056,10 @@ function showChanges(mirror, sha) {
   } else {
     log.info("  (元数据无变化)");
   }
+  const reviewFiles = ["plugins.json", "packages/pacman.txt", "packages/flatpak.txt", "current/theme.name", "current/background"];
   let review = "";
-  for (const file of ["plugins.json", "packages/pacman.txt", "packages/flatpak.txt", "current/theme.name", "current/background"]) {
-    const d = gitOut(["-C", mirror, "diff", "--color=never", applied, sha, "--", file]);
+  for (const file of reviewFiles) {
+    const d = gitOut(["-C", mirror, "diff", "--color=never", base, sha, "--", file]);
     if (d && /\S/.test(d)) {
       process.stdout.write(`${d}
 `);
@@ -6580,8 +7068,12 @@ function showChanges(mirror, sha) {
     }
   }
   if (review !== "") {
+    if (reviewWithVsCode(["-C", mirror, base, sha, "--", ...reviewFiles])) {
+      return;
+    }
     const reviewFile = `${paths.stateDir}/pending-apply.diff`;
-    writeFileSync(reviewFile, `自 ${applied} 到 ${sha} 的元数据更改
+    const heading = firstApply ? "首次应用(完整快照)" : `自 ${base} 到 ${sha}`;
+    writeFileSync(reviewFile, `${heading} 的元数据更改
 
 ${review}`);
     log.info(`完整 diff 已写入 ${reviewFile}`);
@@ -6674,7 +7166,7 @@ async function executeApply(options) {
         force = true;
         log.warn(`强制应用 ${sha};跳过了签名检查`);
       } else {
-        await trustSignerOfCommit(mirror, sha, options.trustSigner === true);
+        await trustRemoteSigner(mirror, sha, options.trustSigner === true);
       }
     }
     if (!commitIsTrusted(mirror, sha) && !first && !force) {
@@ -6795,16 +7287,7 @@ function ensureDotfilesRepo() {
   if (originMatches(url, branch)) {
     return;
   }
-  let connected = originSet(url, branch);
-  if (!connected.ok && connected.out.includes("has no branch")) {
-    const history = join(homedir(), ".local/state/mise/history/repo.git");
-    if (isDir(history)) {
-      log.info(`从本机 mise 历史创建分支 ${branch}`);
-      if (git(["--git-dir", history, "push", url, `HEAD:refs/heads/${branch}`])) {
-        connected = originSet(url, branch);
-      }
-    }
-  }
+  const connected = originSet(url, branch);
   if (!connected.ok) {
     log.warn(`无法连接 mise dot origin ${url}`);
     if (connected.out.trim() !== "") {
@@ -6814,9 +7297,19 @@ function ensureDotfilesRepo() {
   }
   log.info(`已连接 mise dot origin ${url} 分支 ${branch}`);
   if (incomingPending()) {
-    const pull$1 = pull({ takeRemoteAll: true });
-    if (!pull$1.ok) {
-      log.warn(`mise adopt pull 失败: ${pull$1.out}`);
+    const stash = stashIgnoredPaths();
+    try {
+      const pull$1 = pull({ takeRemoteAll: true });
+      if (!pull$1.ok) {
+        log.warn(`mise adopt pull 失败: ${pull$1.out}`);
+      } else {
+        const snapshot = headSnapshot();
+        if (snapshot) {
+          removeRemoteIgnoredPaths(stash, snapshot);
+        }
+      }
+    } finally {
+      restoreIgnoredPaths(stash);
     }
   } else {
     reconcile(readScope(paths.scopeFile));
@@ -7029,13 +7522,23 @@ const HOME = homedir();
 function exportCurrent(dest) {
   const state = `${HOME}/.local/state/omarchy/current`;
   mkdirSync(`${dest}/current`, { recursive: true });
-  writeFileSync(`${dest}/current/theme.name`, readTextFile(`${state}/theme.name`) ?? "");
+  const theme = (readTextFile(`${state}/theme.name`) ?? "").replaceAll(/\s+/g, "");
+  writeFileSync(`${dest}/current/theme.name`, `${theme}
+`);
   let record = "";
   const bg = `${state}/background`;
   const target = isLink(bg) || exists(bg) ? realpath$1(bg) : void 0;
   const base = `${HOME}/.config/omarchy/backgrounds`;
+  const themeBases = [
+    `${state}/theme/`,
+    `${HOME}/.config/omarchy/themes/${theme}/`,
+    `${process.env["OMARCHY_PATH"] ?? "/usr/share/omarchy"}/themes/${theme}/`
+  ];
+  const themeBase = theme === "" ? void 0 : themeBases.find((path) => target?.startsWith(path));
   if (target?.startsWith(`${base}/`)) {
     record = `rel:${target.slice(base.length + 1)}`;
+  } else if (target && themeBase) {
+    record = `theme:${target.slice(themeBase.length)}`;
   } else if (target) {
     record = `abs:${target}`;
   }
@@ -7059,12 +7562,146 @@ function writeMeta(dest, miseHead) {
   writeFileSync(`${dest}/omarsync.json`, `${JSON.stringify(data)}
 `);
 }
-function collectInto(dest, miseHead) {
-  discardRemoteScope(dest);
+function exportLocalInto(dest) {
   exportCurrent(dest);
   exportPackages(dest);
   exportPlugins(dest, "apply");
   exportHooks(dest);
+}
+function readRemotePlugins(dest) {
+  const raw = gitOut(["-C", dest, "show", "HEAD:plugins.json"]);
+  if (!raw) {
+    return [];
+  }
+  try {
+    const data = JSON.parse(raw);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+function mergePackageText(group, remote, local) {
+  if (group === "flatpak") {
+    const rows = /* @__PURE__ */ new Map();
+    for (const line of remote.split("\n")) {
+      const app = line.split("	")[0]?.trim();
+      if (app) {
+        rows.set(app, line);
+      }
+    }
+    for (const line of local.split("\n")) {
+      const app = line.split("	")[0]?.trim();
+      if (app) {
+        rows.set(app, line);
+      }
+    }
+    return [...rows.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, line]) => line).join("\n") + (rows.size > 0 ? "\n" : "");
+  }
+  const names = /* @__PURE__ */ new Set();
+  for (const line of remote.split("\n")) {
+    const name = line.trim();
+    if (name !== "" && !name.startsWith("#")) {
+      names.add(name);
+    }
+  }
+  for (const line of local.split("\n")) {
+    const name = line.trim();
+    if (name !== "" && !name.startsWith("#")) {
+      names.add(name);
+    }
+  }
+  return [...names].sort().join("\n") + (names.size > 0 ? "\n" : "");
+}
+function collectSelectedInto(dest, miseHead, plan, localTmp) {
+  discardRemoteScope(dest);
+  if (plan.current.selected) {
+    mkdirSync(`${dest}/current`, { recursive: true });
+    for (const name of ["theme.name", "background"]) {
+      const source = `${localTmp}/current/${name}`;
+      if (isFile(source)) {
+        copyFileSync(source, `${dest}/current/${name}`);
+      }
+    }
+  }
+  for (const item of plan.hooks) {
+    if (!item.selected) {
+      continue;
+    }
+    const relative = `hooks/post-apply.d/${item.name}`;
+    const target = `${dest}/${relative}`;
+    const source = `${localTmp}/${relative}`;
+    if (item.status === "D") {
+      rmrf(target);
+      continue;
+    }
+    if (isFile(source)) {
+      mkdirSync(`${dest}/hooks/post-apply.d`, { recursive: true });
+      copyFileSync(source, target);
+      chmodSync(target, statSync(source).mode);
+    }
+  }
+  for (const item of plan.packages) {
+    if (!item.selected) {
+      continue;
+    }
+    const relative = `packages/${item.group}.txt`;
+    const remote = gitOut(["-C", dest, "show", `HEAD:${relative}`]) ?? "";
+    const local = readTextFile(`${localTmp}/${relative}`) ?? "";
+    const merged = mergePackageText(item.group, remote, local);
+    mkdirSync(`${dest}/packages`, { recursive: true });
+    writeFileSync(`${dest}/${relative}`, merged);
+  }
+  const remotePlugins = readRemotePlugins(dest);
+  const plugins = /* @__PURE__ */ new Map();
+  for (const row of remotePlugins) {
+    if (typeof row.id === "string") {
+      plugins.set(row.id, row);
+    }
+  }
+  let localPlugins = [];
+  try {
+    const parsed = JSON.parse(readTextFile(`${localTmp}/plugins.json`) ?? "[]");
+    if (Array.isArray(parsed)) {
+      localPlugins = parsed;
+    }
+  } catch {
+    localPlugins = [];
+  }
+  const localById = /* @__PURE__ */ new Map();
+  for (const row of localPlugins) {
+    if (typeof row.id === "string") {
+      localById.set(row.id, row);
+    }
+  }
+  for (const item of plan.plugins) {
+    if (!item.selected) {
+      continue;
+    }
+    const target = `${dest}/plugins-local/${item.id}`;
+    if (item.status === "D") {
+      plugins.delete(item.id);
+      rmrf(target);
+      continue;
+    }
+    const row = localById.get(item.id);
+    if (!row) {
+      continue;
+    }
+    plugins.set(item.id, row);
+    rmrf(target);
+    if (row.local === true && isDir(`${localTmp}/plugins-local/${item.id}`)) {
+      mkdirSync(`${dest}/plugins-local`, { recursive: true });
+      cpSync(`${localTmp}/plugins-local/${item.id}`, target, { recursive: true });
+    }
+  }
+  if (plan.plugins.some((item) => item.selected)) {
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(
+      `${dest}/plugins.json`,
+      `${JSON.stringify([...plugins.values()].sort((a, b) => String(a.id).localeCompare(String(b.id))), void 0, 2)}
+`
+    );
+  }
   writeMeta(dest, miseHead);
 }
 function treesDiffer(left, right) {
@@ -7084,21 +7721,84 @@ function treesDiffer(left, right) {
   }
   return capture(cmp, ["-s", left, right]).code !== 0;
 }
+function packageLines(text, group) {
+  const lines = /* @__PURE__ */ new Map();
+  for (const line of (text ?? "").split("\n")) {
+    if (line.trim() === "" || line.startsWith("#")) {
+      continue;
+    }
+    const id = (group === "flatpak" ? line.split("	")[0] : line.trim()) ?? "";
+    if (id !== "") {
+      lines.set(id, line);
+    }
+  }
+  return lines;
+}
+function packagesDirty(mirror, tmp, ignoredPackages) {
+  for (const group of ["pacman", "aur", "flatpak"]) {
+    const relative = `packages/${group}.txt`;
+    const remote = packageLines(readTextFile(`${mirror}/${relative}`), group);
+    const local = packageLines(readTextFile(`${tmp}/${relative}`), group);
+    for (const id of ignoredPackages) {
+      remote.delete(id);
+      local.delete(id);
+    }
+    for (const [id, line] of local) {
+      if (remote.get(id) !== line) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+function canonicalStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalStringify).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonicalStringify(item)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+function pluginRecords(text, ignored) {
+  const records = /* @__PURE__ */ new Map();
+  try {
+    const rows = JSON.parse(text ?? "[]");
+    for (const row of rows) {
+      if (typeof row.id === "string" && !ignored.has(row.id)) {
+        records.set(row.id, canonicalStringify(row));
+      }
+    }
+  } catch {
+  }
+  return records;
+}
 function mirrorDirty(mirror) {
   const tmp = mktempDir();
   try {
+    const ignored = loadPushIgnore();
     exportCurrent(tmp);
     exportPackages(tmp);
     const pluginsKnown = exportPlugins(tmp, "check");
     let dirty = treesDiffer(`${mirror}/current`, `${tmp}/current`);
-    if (!dirty && treesDiffer(`${mirror}/packages`, `${tmp}/packages`)) {
+    if (!dirty && packagesDirty(mirror, tmp, ignored.packages)) {
       dirty = true;
     }
     if (!dirty && pluginsKnown) {
-      if (treesDiffer(`${mirror}/plugins.json`, `${tmp}/plugins.json`)) {
+      const remotePlugins = pluginRecords(readTextFile(`${mirror}/plugins.json`), ignored.plugins);
+      const localPlugins = pluginRecords(readTextFile(`${tmp}/plugins.json`), ignored.plugins);
+      if (remotePlugins.size !== localPlugins.size) {
         dirty = true;
+      } else {
+        for (const [id, record] of localPlugins) {
+          if (remotePlugins.get(id) !== record) {
+            dirty = true;
+            break;
+          }
+        }
       }
-      if (!dirty && (isDir(`${mirror}/plugins-local`) || isDir(`${tmp}/plugins-local`))) {
+      if (!dirty && ignored.plugins.size === 0 && (isDir(`${mirror}/plugins-local`) || isDir(`${tmp}/plugins-local`))) {
         if (treesDiffer(`${mirror}/plugins-local`, `${tmp}/plugins-local`)) {
           dirty = true;
         }
@@ -7136,11 +7836,19 @@ function readCounts(mirror, branch) {
   if (!sha) {
     return [0, 0, ""];
   }
+  const headTree = gitOut(["-C", mirror, "rev-parse", "--verify", `${head}^{tree}`]);
+  const remoteTree = gitOut(["-C", mirror, "rev-parse", "--verify", `${sha}^{tree}`]);
+  if (headTree && remoteTree && headTree === remoteTree) {
+    return [0, 0, sha];
+  }
   const behind = Number(gitOut(["-C", mirror, "rev-list", "--count", `HEAD..${sha}`]) ?? 0);
   const ahead = Number(gitOut(["-C", mirror, "rev-list", "--count", `${sha}..HEAD`]) ?? 0);
   return [behind, ahead, sha];
 }
 function isRunning() {
+  if (process.env["OMARSYNC_LOCK_HELD"] === "1") {
+    return false;
+  }
   const flock = resolveTool("flock");
   if (!flock) {
     return false;
@@ -7152,7 +7860,12 @@ function miseDirty() {
   if (!available() || !featureOk()) {
     return false;
   }
-  return save() === true;
+  const unsaved = unsavedFiles();
+  if (unsaved !== void 0) {
+    const ignored = loadPushIgnore();
+    return unsaved.some((name) => !pathIgnored(ignored, name));
+  }
+  return /\S/.test(diff().out.replace(/^mise files: all files are applied\s*$/m, ""));
 }
 function changedFiles() {
   const repo = join(homedir(), ".local", "state", "mise", "history", "repo.git");
@@ -7221,7 +7934,10 @@ function collect() {
       if (!dirty) {
         dirty = miseDirty();
         if (dirty) {
-          st.changedFiles = changedFiles();
+          const unsaved = unsavedFiles();
+          const ignored = loadPushIgnore();
+          const visible = (unsaved ?? []).filter((name) => !pathIgnored(ignored, name));
+          st.changedFiles = visible.length > 0 ? visible.map((name) => name.replace(/^~\//, "")).slice(0, 30) : changedFiles();
         }
       }
       st.dirty = dirty;
@@ -7295,6 +8011,577 @@ function executeStatus(json) {
   }
 }
 
+const DOTFILES_SHADOW = "refs/omarsync/dotfiles-tip";
+const REMOTE_REF = "refs/omarsync/remote-dotfiles";
+function history(args) {
+  return ["--git-dir", historyRepo(), ...args];
+}
+function showFromTree(tree, path) {
+  return gitOut(history(["show", `${tree}:${path}`]));
+}
+function readManifest(tree) {
+  const raw = showFromTree(tree, ".mise-history/manifest.json");
+  if (!raw) {
+    return void 0;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    die(`mise 清单不是合法 JSON: ${tree}:.mise-history/manifest.json`);
+  }
+}
+function mergeManifest(base, local, selected, deleted, ignored) {
+  const merged = base ? { ...base } : local ? { ...local } : { enrollment: [], exclude: [], permissions: {} };
+  const basePermissions = { ...merged.permissions ?? {} };
+  const localPermissions = { ...local?.permissions ?? {} };
+  const baseEnrollment = [...merged.enrollment ?? []];
+  const localEnrollment = [...local?.enrollment ?? []];
+  const excluded = new Set(pushIgnoreExcludes(ignored));
+  if (!base && Array.isArray(merged.exclude)) {
+    merged.exclude = merged.exclude.filter((item) => typeof item !== "string" || !excluded.has(item));
+  }
+  const excludeGlobs = new Set(
+    Array.isArray(merged.exclude) ? merged.exclude.filter((item) => typeof item === "string") : []
+  );
+  if (Array.isArray(local?.exclude)) {
+    for (const item of local.exclude) {
+      if (typeof item === "string" && !excluded.has(item)) {
+        excludeGlobs.add(item);
+      }
+    }
+  }
+  merged.exclude = [...excludeGlobs];
+  for (const path of selected) {
+    const already = baseEnrollment.some((entry) => {
+      const root = entry && typeof entry === "object" && typeof entry.path === "string" ? entry.path : "";
+      return root !== "" && (path === root || path.startsWith(`${root}/`));
+    });
+    if (!already) {
+      const source = localEnrollment.find((entry) => {
+        const root = entry && typeof entry === "object" && typeof entry.path === "string" ? entry.path : "";
+        return root !== "" && (path === root || path.startsWith(`${root}/`));
+      });
+      if (source) {
+        baseEnrollment.push(source);
+      }
+    }
+    const localPermission = localPermissions[path];
+    if (localPermission === void 0) {
+      delete basePermissions[path];
+    } else if (basePermissions[path] !== localPermission) {
+      basePermissions[path] = localPermission;
+    }
+  }
+  for (const path of deleted) {
+    delete basePermissions[path];
+  }
+  merged.enrollment = baseEnrollment;
+  merged.permissions = basePermissions;
+  return merged;
+}
+function writeManifest(indexFile, manifest) {
+  const tmp = mktempDir();
+  const file = join(tmp, "manifest.json");
+  try {
+    mkdirSync(tmp, { recursive: true });
+    writeFileSync(file, `${JSON.stringify(manifest, void 0, 2)}
+`);
+    const blob = gitOut(history(["hash-object", "-w", "--", file]));
+    if (!blob || !gitCaptureEnv(
+      history(["update-index", "--add", "--cacheinfo", `100644,${blob},.mise-history/manifest.json`]),
+      [`GIT_INDEX_FILE=${indexFile}`]
+    ).ok) {
+      die("无法写入合并后的 mise 清单");
+    }
+  } finally {
+    rmrf(tmp);
+  }
+}
+function forbiddenPath(path) {
+  const local = path.replace(/^home\//, "");
+  const parts = local.split("/");
+  return parts.includes(".git") || parts.includes("node_modules") || /(^|\/)\.env(\.|$)/.test(local) || local.startsWith(".config/omarchy/plugins") || local.startsWith(".config/omarsync") || local.startsWith(".ssh") || local.startsWith(".gnupg");
+}
+function validateTree(tree) {
+  const out = gitOut(history(["ls-tree", "-r", "--name-only", tree]));
+  for (const path of (out ?? "").split("\n")) {
+    if (path === "") {
+      continue;
+    }
+    if (forbiddenPath(path)) {
+      die(`选择性发布拒绝敏感/禁用路径: ${path}`);
+    }
+    if (path.startsWith("home/")) {
+      assertSafeRel(path.slice(5));
+    }
+  }
+}
+function fetchRemoteDotfiles(url, branch) {
+  const has = gitCapture(["ls-remote", "--exit-code", "--heads", url, branch]);
+  if (has.code === 2) {
+    const empty = emptySnapshot();
+    if (!empty) {
+      die("无法取得空树对象");
+    }
+    return { tree: empty };
+  }
+  if (!has.ok) {
+    die(`无法读取远程 dotfiles 分支 ${branch}`);
+  }
+  if (!git(history(["fetch", "--quiet", "--no-tags", url, `+refs/heads/${branch}:${REMOTE_REF}`]))) {
+    die("抓取远程 dotfiles 失败");
+  }
+  const commit = gitOut(history(["rev-parse", "--verify", "--quiet", `${REMOTE_REF}^{commit}`]));
+  const tree = commit ? gitOut(history(["rev-parse", "--verify", `${commit}^{tree}`])) : void 0;
+  if (!isFullSha(commit) || !isFullSha(tree)) {
+    die("远程 dotfiles 没有解析出树");
+  }
+  return { commit, tree };
+}
+function pendingExcludeAdds(remoteTree, localTree, ignored) {
+  const localManifest = readManifest(localTree);
+  if (!localManifest) {
+    return [];
+  }
+  const baseManifest = readManifest(remoteTree);
+  const merged = mergeManifest(baseManifest, localManifest, [], [], ignored);
+  const baseSet = new Set(
+    Array.isArray(baseManifest?.exclude) ? baseManifest.exclude.filter((item) => typeof item === "string") : []
+  );
+  return (Array.isArray(merged.exclude) ? merged.exclude : []).filter((item) => typeof item === "string").filter((glob) => !baseSet.has(glob));
+}
+function buildSelectedDotfiles(remote, localTree, selectedPaths2, selectedDeletes, ignored) {
+  const localManifest = readManifest(localTree);
+  if (!localManifest) {
+    die("本机 mise 快照没有 manifest.json");
+  }
+  const baseManifest = readManifest(remote.tree);
+  const mergedManifest = mergeManifest(baseManifest, localManifest, selectedPaths2, selectedDeletes, ignored);
+  const manifestChanged = !baseManifest || !isDeepStrictEqual(baseManifest, mergedManifest);
+  if (selectedPaths2.length === 0 && selectedDeletes.length === 0 && !manifestChanged) {
+    return { tree: remote.tree };
+  }
+  const tmp = mkdtempSync(join(dirname(historyRepo()), ".omarsync-index-"));
+  const indexFile = join(tmp, "index");
+  try {
+    if (!gitCapture(history(["read-tree", `--index-output=${indexFile}`, remote.tree])).ok) {
+      die("无法读取远程 dotfiles 树");
+    }
+    const deleteInput = selectedDeletes.map((path) => `0 ${"0".repeat(40)}	${path}
+`).join("");
+    if (deleteInput !== "") {
+      const result = gitCaptureInputEnv(history(["update-index", "--index-info"]), [
+        `GIT_INDEX_FILE=${indexFile}`
+      ], deleteInput);
+      if (!result.ok) {
+        die("无法从树里删除勾选路径");
+      }
+    }
+    for (const path of selectedPaths2) {
+      const entry = snapshotEntry(localTree, path);
+      if (!entry) {
+        die(`本机快照里没有 ${path}`);
+      }
+      const result = gitCaptureEnv(
+        history(["update-index", "--add", "--cacheinfo", `${entry.mode},${entry.blob},${path}`]),
+        [`GIT_INDEX_FILE=${indexFile}`]
+      );
+      if (!result.ok) {
+        die(`无法写入树路径 ${path}`);
+      }
+    }
+    if (manifestChanged) {
+      writeManifest(indexFile, mergedManifest);
+    }
+    const tree = gitOutEnv(history(["write-tree"]), [`GIT_INDEX_FILE=${indexFile}`]);
+    if (!isFullSha(tree)) {
+      die("无法写出选择性发布树");
+    }
+    validateTree(tree);
+    const parent = remote.commit;
+    const args = history(["-c", "user.name=mise", "-c", "user.email=mise@localhost", "commit-tree", tree]);
+    if (parent) {
+      args.push("-p", parent);
+    }
+    const message = [
+      `sync selected from ${hostnameSafe()} @ ${iso8601()}`,
+      "",
+      `Mise-History: ${JSON.stringify({ trigger: "save", description_source: "computed", task: null, labels: [], omitted: [], incomplete: [], operation: null })}`,
+      "Mise-History-Matcher: 2"
+    ].join("\n");
+    args.push("-m", message);
+    const commit = gitOut(args);
+    if (!isFullSha(commit)) {
+      die("无法创建 dotfiles 提交");
+    }
+    if (!git(history(["update-ref", DOTFILES_SHADOW, commit]))) {
+      die("无法更新本机 dotfiles shadow ref");
+    }
+    log.info(`已构造选择性快照 ${tree} (${commit.slice(0, 10)})`);
+    return { tree, commit };
+  } finally {
+    rmrf(tmp);
+  }
+}
+function importDotfilesCommit(mirror, commit) {
+  if (!isFullSha(commit)) {
+    return false;
+  }
+  return git([
+    "-C",
+    mirror,
+    "fetch",
+    "--quiet",
+    "--no-tags",
+    historyRepo(),
+    `${DOTFILES_SHADOW}:refs/omarsync/dotfiles-publish`
+  ]);
+}
+function selectedPaths(plan) {
+  const writes = [];
+  const deletes = [];
+  for (const item of plan.files) {
+    if (!item.selected) {
+      continue;
+    }
+    if (item.status === "D") {
+      deletes.push(item.path);
+    } else {
+      writes.push(item.path);
+    }
+  }
+  return { writes, deletes };
+}
+function remoteMiseHead(mirror) {
+  const raw = gitOut(["-C", mirror, "show", "HEAD:omarsync.json"]);
+  if (!raw) {
+    return void 0;
+  }
+  try {
+    const head = JSON.parse(raw).miseHead;
+    const sha = typeof head === "string" ? head : void 0;
+    return isFullSha(sha) ? sha : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function assertMiseHead(mirror, expected) {
+  const actual = remoteMiseHead(mirror);
+  if (actual !== expected) {
+    die(`签名前 miseHead 不一致:期望 ${expected},实际 ${actual ?? "<空>"}`);
+  }
+}
+
+function show(mirror, path) {
+  return gitOut(["-C", mirror, "show", `HEAD:${path}`]);
+}
+function blobOf(mirror, file) {
+  return gitOut(["-C", mirror, "hash-object", "--", file]);
+}
+function remoteHooks(mirror) {
+  const out = gitOut(["-C", mirror, "ls-tree", "-r", "--name-only", "HEAD", "hooks/post-apply.d"]);
+  if (!out) {
+    return [];
+  }
+  return out.split("\n").filter((line) => line !== "").map((line) => line.slice("hooks/post-apply.d/".length));
+}
+function localHooks(localTmp) {
+  const dir = `${localTmp}/hooks/post-apply.d`;
+  if (!isDir(dir)) {
+    return [];
+  }
+  return readdirSync(dir).sort();
+}
+function sameFile(localFile, mirror, remotePath) {
+  if (!isFile(localFile)) {
+    return false;
+  }
+  const remoteBlob = gitOut(["-C", mirror, "rev-parse", `HEAD:${remotePath}`]);
+  const localBlob = blobOf(mirror, localFile);
+  return remoteBlob !== void 0 && localBlob !== void 0 && remoteBlob === localBlob;
+}
+function localPlugins(localTmp) {
+  const map = /* @__PURE__ */ new Map();
+  try {
+    const rows = JSON.parse(readTextFile(`${localTmp}/plugins.json`) ?? "[]");
+    for (const row of rows) {
+      if (typeof row.id === "string" && row.id !== "") {
+        map.set(row.id, row);
+      }
+    }
+  } catch {
+  }
+  return map;
+}
+function remotePlugins(mirror) {
+  const map = /* @__PURE__ */ new Map();
+  const raw = show(mirror, "plugins.json");
+  if (!raw) {
+    return map;
+  }
+  try {
+    const rows = JSON.parse(raw);
+    for (const row of rows) {
+      if (typeof row.id === "string" && row.id !== "") {
+        map.set(row.id, row);
+      }
+    }
+  } catch {
+  }
+  return map;
+}
+function packageText(mirror, group) {
+  return show(mirror, `packages/${group}.txt`) ?? "";
+}
+function localPackageText(localTmp, group) {
+  return readTextFile(`${localTmp}/packages/${group}.txt`) ?? "";
+}
+function packageId(line, group) {
+  return group === "flatpak" ? (line.split("	")[0] ?? "").trim() : line.trim();
+}
+function packageMap(text, group, ignored) {
+  const map = /* @__PURE__ */ new Map();
+  for (const line of text.split("\n")) {
+    const id = packageId(line, group);
+    if (id !== "" && !ignored.has(id) && !line.startsWith("#")) {
+      map.set(id, line);
+    }
+  }
+  return map;
+}
+function packageChanged(remote, local) {
+  for (const [id, line] of local) {
+    if (remote.get(id) !== line) {
+      return true;
+    }
+  }
+  return false;
+}
+function currentText(mirror, localTmp) {
+  const names = ["current/theme.name", "current/background"];
+  const remote = names.map((name) => (show(mirror, name) ?? "").trim()).join("\0");
+  const local = names.map((name) => (readTextFile(`${localTmp}/${name}`) ?? "").trim()).join("\0");
+  return { remote, local };
+}
+function createPlan(mirror, baseTree, localTree, localTmp, ignored) {
+  const files = [];
+  for (const change of snapshotChangedPaths(baseTree, localTree)) {
+    if (pathIgnored(ignored, change.path)) {
+      continue;
+    }
+    files.push({
+      path: change.path,
+      status: change.status,
+      selected: change.status !== "D"
+    });
+  }
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  const local = localPlugins(localTmp);
+  const remote = remotePlugins(mirror);
+  const plugins = [];
+  for (const [id, record] of local) {
+    if (ignored.plugins.has(id)) {
+      continue;
+    }
+    const previous = remote.get(id);
+    const status = previous === void 0 ? "A" : "M";
+    const changed = previous === void 0 || !isDeepStrictEqual(previous, record) || record.local === true;
+    if (changed) {
+      plugins.push({ id, status, selected: true });
+    }
+  }
+  for (const id of remote.keys()) {
+    if (ignored.plugins.has(id) || local.has(id)) {
+      continue;
+    }
+    plugins.push({ id, status: "D", selected: false });
+  }
+  plugins.sort((a, b) => a.id.localeCompare(b.id));
+  const remoteHookNames = remoteHooks(mirror);
+  const localHookNames = localHooks(localTmp);
+  const hookNames = /* @__PURE__ */ new Set([...remoteHookNames, ...localHookNames]);
+  const hooks = [];
+  for (const name of [...hookNames].sort()) {
+    const remotePath = `hooks/post-apply.d/${name}`;
+    const localFile = `${localTmp}/${remotePath}`;
+    const inRemote = remoteHookNames.includes(name);
+    const inLocal = localHookNames.includes(name);
+    const same = inRemote && inLocal && sameFile(localFile, mirror, remotePath);
+    if (same) {
+      continue;
+    }
+    const status = !inRemote ? "A" : !inLocal ? "D" : "M";
+    hooks.push({ name, status, selected: status !== "D" });
+  }
+  const packages = [];
+  for (const group of ["pacman", "aur", "flatpak"]) {
+    const remoteMap = packageMap(packageText(mirror, group), group, ignored.packages);
+    const localMap = packageMap(localPackageText(localTmp, group), group, ignored.packages);
+    if (packageChanged(remoteMap, localMap)) {
+      packages.push({ group, status: remoteMap.size === 0 ? "A" : "M", selected: true });
+    }
+  }
+  const current = currentText(mirror, localTmp);
+  return {
+    files,
+    plugins,
+    hooks,
+    packages,
+    current: {
+      selected: current.remote !== current.local,
+      status: current.remote === "" ? "A" : "M",
+      candidate: current.remote !== current.local
+    },
+    ignored
+  };
+}
+function fileLine(item) {
+  return `- [${item.selected ? "x" : " "}] file | ${item.status} | ${item.path}`;
+}
+function pluginLine(item) {
+  return `- [${item.selected ? "x" : " "}] plugin | ${item.status} | ${item.id}`;
+}
+function hookLine(item) {
+  return `- [${item.selected ? "x" : " "}] hook | ${item.status} | ${item.name}`;
+}
+function packageLine(item) {
+  return `- [${item.selected ? "x" : " "}] package | ${item.status} | ${item.group}`;
+}
+function section(title, lines) {
+  return lines.length === 0 ? [] : [`## ${title}`, ...lines, ""];
+}
+function writeSelectionFile(plan) {
+  const deletes = plan.files.filter((item) => item.status === "D").map(fileLine);
+  const upserts = plan.files.filter((item) => item.status !== "D").map(fileLine);
+  const lines = [
+    "# Omarsync 推送选择",
+    "# [x] = 发布这项改动,[ ] = 跳过(远程保持原样)。只改方括号里的 x/空格,不要删行或改其他内容。",
+    "# 行内字母:A=本机新增,M=已修改,D=远程有而本机没有(勾选即从远程删除,默认不勾=保留远程)。",
+    "# 改完保存,回终端确认。",
+    "",
+    ...section(
+      `将从远程删除(${deletes.length})——本机 scope 未跟踪或已删除;默认保留远程,勾选才删`,
+      deletes
+    ),
+    ...section(`将发布的文件(${upserts.length})——新增/修改,默认发布`, upserts),
+    ...section(`插件(${plan.plugins.length})——A 新增 / M 修改`, plan.plugins.map(pluginLine)),
+    ...section(
+      `包清单(${plan.packages.length})——pacman / aur / flatpak 按组,选中与远程取并集`,
+      plan.packages.map(packageLine)
+    ),
+    ...section(`apply 钩子(${plan.hooks.length})`, plan.hooks.map(hookLine)),
+    ...plan.current.candidate ? section("主题与壁纸(元数据)", [
+      `- [${plan.current.selected ? "x" : " "}] current | ${plan.current.status} |`
+    ]) : []
+  ];
+  const file = `${paths.stateDir}/pending-push.selection`;
+  try {
+    mkdirSync(paths.stateDir, { recursive: true });
+    writeFileSync(file, lines.join("\n"));
+  } catch {
+    die(`无法写选择清单 ${file}`);
+  }
+  return file;
+}
+function parseLine(raw, number) {
+  const line = raw.trim();
+  if (line === "" || line.startsWith("#")) {
+    return void 0;
+  }
+  const match = /^- \[([ xX])\] ([a-z]+) \| ([AMD]) \| ?(.*)$/.exec(line);
+  if (!match) {
+    die(`选择清单第 ${number} 行无法解析;不要改动格式`);
+  }
+  return {
+    selected: match[1].toLowerCase() === "x",
+    kind: match[2],
+    status: match[3],
+    value: match[4].trim()
+  };
+}
+function readSelectionFile(plan) {
+  const file = `${paths.stateDir}/pending-push.selection`;
+  const text = readTextFile(file);
+  if (text === void 0) {
+    die(`选择清单不存在: ${file}`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const failure = (key, number) => die(`选择清单第 ${number} 行重复或未知条目: ${key}`);
+  for (const [index, raw] of text.split("\n").entries()) {
+    const parsed = parseLine(raw, index + 1);
+    if (!parsed) {
+      continue;
+    }
+    const key = `${parsed.kind}:${parsed.value}`;
+    if (seen.has(key)) {
+      failure(key, index + 1);
+    }
+    seen.add(key);
+    if (parsed.kind === "file") {
+      const item = plan.files.find((candidate) => candidate.path === parsed.value);
+      if (!item || item.status !== parsed.status) {
+        failure(key, index + 1);
+      }
+      item.selected = parsed.selected;
+    } else if (parsed.kind === "plugin") {
+      const item = plan.plugins.find((candidate) => candidate.id === parsed.value);
+      if (!item || item.status !== parsed.status) {
+        failure(key, index + 1);
+      }
+      item.selected = parsed.selected;
+    } else if (parsed.kind === "hook") {
+      const item = plan.hooks.find((candidate) => candidate.name === parsed.value);
+      if (!item || item.status !== parsed.status) {
+        failure(key, index + 1);
+      }
+      item.selected = parsed.selected;
+    } else if (parsed.kind === "package") {
+      const item = plan.packages.find((candidate) => candidate.group === parsed.value);
+      if (!item || item.status !== parsed.status) {
+        failure(key, index + 1);
+      }
+      item.selected = parsed.selected;
+    } else if (parsed.kind === "current") {
+      if (!plan.current.candidate) {
+        failure(key, index + 1);
+      }
+      if (parsed.value !== "" || parsed.status !== plan.current.status) {
+        failure(key, index + 1);
+      }
+      plan.current.selected = parsed.selected;
+    } else {
+      failure(key, index + 1);
+    }
+  }
+  for (const item of plan.files) {
+    if (!seen.has(`file:${item.path}`)) {
+      die(`选择清单缺少文件条目: ${item.path}`);
+    }
+  }
+  for (const item of plan.plugins) {
+    if (!seen.has(`plugin:${item.id}`)) {
+      die(`选择清单缺少插件条目: ${item.id}`);
+    }
+  }
+  for (const item of plan.hooks) {
+    if (!seen.has(`hook:${item.name}`)) {
+      die(`选择清单缺少 hook 条目: ${item.name}`);
+    }
+  }
+  for (const item of plan.packages) {
+    if (!seen.has(`package:${item.group}`)) {
+      die(`选择清单缺少包清单条目: ${item.group}`);
+    }
+  }
+  if (plan.current.candidate && !seen.has("current:")) {
+    die("选择清单缺少 current 条目");
+  }
+  if (!plan.files.some((item) => item.selected) && !plan.plugins.some((item) => item.selected) && !plan.hooks.some((item) => item.selected) && !plan.packages.some((item) => item.selected) && !plan.current.selected) {
+    log.warn("本次没有任何选择;不会发布变化");
+  }
+  return plan;
+}
+
 function requireMirror() {
   if (!isDir(`${paths.mirrorDir}/.git`)) {
     die("未初始化。运行: omarsync init");
@@ -7306,6 +8593,30 @@ function remoteHasBranch(mirror, branch) {
 }
 function headTree(mirror) {
   return gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", "HEAD^{tree}"]);
+}
+function discardTimestampOnlyChange(mirror) {
+  const names = gitOut(["-C", mirror, "diff", "--cached", "--name-only"]);
+  if (names !== "omarsync.json") {
+    return;
+  }
+  const parse = (raw) => {
+    if (!raw) {
+      return void 0;
+    }
+    try {
+      const data = JSON.parse(raw);
+      const { pushedAt: _pushedAt, ...content } = data;
+      return content;
+    } catch {
+      return void 0;
+    }
+  };
+  const previous = parse(gitOut(["-C", mirror, "show", "HEAD:omarsync.json"]));
+  const staged = parse(gitOut(["-C", mirror, "show", ":omarsync.json"]));
+  if (previous && staged && isDeepStrictEqual(previous, staged)) {
+    git(["-C", mirror, "restore", "--staged", "--worktree", "--source=HEAD", "--", "omarsync.json"]);
+    log.info("仅推送时间变化,未创建新快照");
+  }
 }
 async function reviewMergedTree(mirror, reviewedCommit, reviewedTree, skipConfirm) {
   const finalTree = headTree(mirror);
@@ -7326,8 +8637,12 @@ async function reviewMergedTree(mirror, reviewedCommit, reviewedTree, skipConfir
     writeFileSync(reviewFile, `===== 合并后的最终 diff =====
 ${finalDiff}
 `);
-    log.info(`合并改写了已确认的树。最终 diff 已写入 ${reviewFile}`);
-    openInEditor([reviewFile]);
+    if (reviewWithVsCode(["-C", mirror, reviewedTree, "HEAD"])) {
+      log.info("合并改写了已确认的树,已在 VS Code 左右对比中展示最终 diff");
+    } else {
+      log.info(`合并改写了已确认的树。最终 diff 已写入 ${reviewFile}`);
+      openInEditor([reviewFile]);
+    }
   } else {
     log.info("合并改写了已确认的树");
   }
@@ -7342,122 +8657,338 @@ ${finalDiff}
   }
   return finalTree;
 }
+function normalizedRemote(url) {
+  return url.replace(/\/+$/, "").replace(/\.git$/, "");
+}
+function reviewPushDiff(mirror, baseTree, selectedTree, hasMetaChanges) {
+  if (!vsCodeDiffAvailable()) {
+    return false;
+  }
+  log.info("正在用 VS Code 左右对比;关闭当前 diff 标签可继续下一个文件");
+  if (hasMetaChanges && !reviewWithVsCode(["-C", mirror, "--cached"])) {
+    return false;
+  }
+  if (baseTree !== selectedTree) {
+    return reviewWithVsCode([
+      "--git-dir",
+      historyRepo(),
+      baseTree,
+      selectedTree,
+      "--",
+      "home"
+    ]);
+  }
+  return true;
+}
+function planHasCandidates(plan) {
+  return plan.files.length > 0 || plan.plugins.length > 0 || plan.hooks.length > 0 || plan.packages.length > 0 || plan.current.candidate;
+}
+function planHasSelection(plan) {
+  return plan.files.some((item) => item.selected) || plan.plugins.some((item) => item.selected) || plan.hooks.some((item) => item.selected) || plan.packages.some((item) => item.selected) || plan.current.selected;
+}
+function refreshRemoteMain(mirror, branch) {
+  if (!remoteHasBranch(mirror, branch)) {
+    return void 0;
+  }
+  if (!git(["-C", mirror, "fetch", "--quiet", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`])) {
+    die("fetch 远程 metadata 失败");
+  }
+  const tip = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", `origin/${branch}`]);
+  if (!isFullSha(tip)) {
+    die("fetch 后读不到远程 metadata 尖端");
+  }
+  requireTrustedRemoteTip(mirror, tip);
+  return tip;
+}
 async function executePush(skipConfirm = false) {
   const mirror = requireMirror();
   const branch = configGet("BRANCH", readTextFile) ?? "main";
   ensurePushSigner();
   ensureIdentity(mirror);
+  const remoteMain = refreshRemoteMain(mirror, branch);
+  const localTip = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", "HEAD"]);
+  if (remoteMain) {
+    if (localTip && localTip !== remoteMain) {
+      log.warn("丢弃本地未发布的 metadata 镜像,从远程基线重新构造");
+    }
+    if (!git(["-C", mirror, "reset", "--hard", remoteMain])) {
+      die("无法切到远程 metadata 基线");
+    }
+    git(["-C", mirror, "clean", "-fd"]);
+  }
   preparePushBranch(mirror, branch);
-  let miseHead;
-  if (available()) {
-    ensureDotfilesRepo();
-    if (!originConnected()) {
-      die("mise dot origin 未连接,所以 dotfiles 分支没有更新");
-    }
-    reconcile(readScope(paths.scopeFile));
-    const saved = save();
-    if (saved === void 0) {
-      die("mise dot save 失败");
-    }
-    if (saved) {
-      log.info("mise dot 检查点已保存");
-    }
-    miseHead = headSnapshot();
-  } else {
-    log.warn("mise 未安装;只推元数据。运行: omarchy pkg add mise");
+  if (dotOriginUrl() === "") {
+    die("dotfiles origin 未配置;先运行 omarsync setup");
   }
-  collectInto(mirror, miseHead);
-  git(["-C", mirror, "add", "-A"]);
-  const metaStat = gitCapture(["-C", mirror, "diff", "--cached", "--stat"]).out;
-  const metaDiff = gitCapture(["-C", mirror, "diff", "--cached", "--color=never"]).out;
-  const miseDiff = available() ? diff().out : "";
-  if (/\S/.test(metaStat)) {
-    log.info("元数据变化:");
-    for (const line of metaStat.split("\n")) {
-      log.info(`  ${line}`);
-    }
-  } else {
-    log.info("元数据无变化");
+  const remoteHead = remoteMain ? remoteMiseHead(mirror) : void 0;
+  const dot = fetchRemoteDotfiles(dotOriginUrl(), dotBranch());
+  if (remoteMain && remoteHead && dot.tree !== remoteHead) {
+    die("远程 dotfiles 尖端与签名 miseHead 不一致;先修复远程再 push");
   }
-  let review = "";
-  if (/\S/.test(metaDiff)) {
-    review += `===== 元数据 diff(omarchy-config)=====
-${metaDiff}
-`;
+  if (!remoteMain && dot.commit) {
+    die("远程已有 dotfiles 分支但没有签名的 metadata 基线;拒绝自动发布");
   }
-  if (/\S/.test(miseDiff)) {
-    log.info("文件差异(mise dot diff):");
-    for (const line of miseDiff.split("\n")) {
-      log.info(`  ${line}`);
-    }
-    review += `===== 文件 diff(dotfiles 分支)=====
-${miseDiff}
-`;
+  const baseTree = remoteHead ?? dot.tree;
+  if (!available()) {
+    die("选择性 push 需要 mise;运行: omarchy pkg add mise");
   }
-  if (review !== "") {
-    mkdirSync(paths.stateDir, { recursive: true });
-    const reviewFile = `${paths.stateDir}/pending-push.diff`;
-    writeFileSync(reviewFile, review);
-    log.info(`完整 diff 已写入 ${reviewFile}`);
-    openInEditor([reviewFile]);
+  if (!originConnected()) {
+    log.warn("mise dot origin 未连接;本次仍按配置 URL 选择性发布,但 pull/apply 前需要 setup");
   }
-  if (!skipConfirm && !await confirm("发布这份快照到远程仓库?")) {
-    die("已取消,未推送");
+  ensurePushIgnore();
+  reconcile(readScope(paths.scopeFile));
+  const saved = save();
+  if (saved === void 0) {
+    die("mise dot save 失败");
   }
-  if (gitCapture(["-C", mirror, "diff", "--cached", "--quiet"]).ok) {
-    log.info("没有要提交的本地变化");
-  } else {
-    if (!git(["-C", mirror, "commit", "-S", "-m", `sync from ${hostnameSafe()} @ ${iso8601()}`])) {
-      die("本地提交签名失败,未推送");
-    }
-    log.info("已提交本地变化");
+  if (saved) {
+    log.info("mise dot 检查点已保存");
   }
-  const reviewedCommit = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", "HEAD"]);
-  const reviewedTree = headTree(mirror);
-  if (!reviewedCommit || !reviewedTree) {
-    die("无法读取已审阅的提交");
+  const localTree = headSnapshot();
+  if (!isFullSha(localTree)) {
+    die("读取不到本机 mise 快照");
   }
-  if (remoteHasBranch(mirror, branch)) {
-    if (!git(["-C", mirror, "fetch", "--quiet", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`])) {
-      die("fetch 失败,未合并也未签名");
-    }
-    const remoteTip = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", `origin/${branch}`]);
-    if (!remoteTip) {
-      die("fetch 之后读不到远程提交,未合并也未签名");
-    }
-    requireTrustedRemoteTip(mirror, remoteTip);
-    if (!git(["-C", mirror, "merge-base", "--is-ancestor", remoteTip, "HEAD"])) {
-      if (!git(["-C", mirror, "rebase", "--quiet", "-X", "theirs", remoteTip])) {
-        git(["-C", mirror, "rebase", "--abort"]);
-        die(`rebase 到 origin/${branch} 失败,未签名`);
+  const localTmp = mktempDir();
+  try {
+    exportLocalInto(localTmp);
+    const ignored = loadPushIgnore();
+    const plan = createPlan(mirror, baseTree, localTree, localTmp, ignored);
+    const excludeAdds = pendingExcludeAdds(baseTree, localTree, ignored);
+    if (excludeAdds.length > 0) {
+      log.info(`将发布 ${excludeAdds.length} 条本机 exclude 规则(与远程并集,规避 mise 整字段合并冲突):`);
+      for (const glob of excludeAdds) {
+        log.info(`  ${glob}`);
       }
     }
-  }
-  discardRemoteScope(mirror);
-  if (!gitCapture(["-C", mirror, "diff", "--cached", "--quiet"]).ok) {
-    if (!git(["-C", mirror, "commit", "-S", "-m", "drop untrusted remote scope file"])) {
-      git(["-C", mirror, "reset", "--hard", reviewedCommit]);
-      die("去掉远程 scope 的签名提交失败,未推送");
-    }
-  }
-  const treeToSign = await reviewMergedTree(mirror, reviewedCommit, reviewedTree, skipConfirm);
-  signReviewedTip(mirror, treeToSign);
-  if (!git(["-C", mirror, "push", "--quiet", "-u", "origin", `HEAD:${branch}`])) {
-    die("git push 失败");
-  }
-  log.info(`已推送 ${branch}`);
-  if (available()) {
-    const { ok, out } = sync(false);
-    if (!ok) {
-      log.warn(`mise dot sync 失败: ${out}`);
-      log.warn("解决冲突: mise dot conflicts / mise dot pull --take-remote <path>");
-      process.exitCode = 1;
+    if (!planHasCandidates(plan) && excludeAdds.length === 0) {
+      log.info("没有需要推送的变化");
       executeStatus(false);
       return;
     }
-    log.info("mise dot 历史已发布");
+    if (!planHasSelection(plan) && excludeAdds.length === 0) {
+      log.info("没有需要发布的新增/修改;远程有而本机未跟踪的路径默认保留远程,本次不推送");
+      executeStatus(false);
+      return;
+    }
+    if (!skipConfirm && stdinIsTty() && planHasCandidates(plan)) {
+      const selectionFile = writeSelectionFile(plan);
+      log.info(`选择清单已写入 ${selectionFile}`);
+      openInEditor([selectionFile]);
+      if (!await confirm("选择完成并继续?")) {
+        die("已取消,未推送");
+      }
+      readSelectionFile(plan);
+      if (!planHasSelection(plan) && excludeAdds.length === 0) {
+        die("没有勾选任何内容,已取消");
+      }
+    } else if (!planHasSelection(plan) && excludeAdds.length === 0) {
+      log.info("没有需要发布的变化(删除项默认不选)");
+      executeStatus(false);
+      return;
+    }
+    const { writes, deletes } = selectedPaths(plan);
+    const built = buildSelectedDotfiles(dot, localTree, writes, deletes, ignored);
+    collectSelectedInto(mirror, built.tree, plan, localTmp);
+    git(["-C", mirror, "add", "-A"]);
+    discardTimestampOnlyChange(mirror);
+    const metaStat = gitCapture(["-C", mirror, "diff", "--cached", "--stat"]).out;
+    const metaDiff = gitCapture(["-C", mirror, "diff", "--cached", "--color=never"]).out;
+    const fileDiff = built.tree === baseTree ? "" : snapshotDiff(baseTree, built.tree);
+    let review = "";
+    if (/\S/.test(metaDiff)) {
+      review += `===== 元数据 diff(omarchy-config)=====
+${metaDiff}
+`;
+    }
+    if (/\S/.test(fileDiff)) {
+      review += `===== 文件 diff(dotfiles 分支)=====
+${fileDiff}
+`;
+    }
+    if (review !== "") {
+      mkdirSync(paths.stateDir, { recursive: true });
+      const reviewFile = `${paths.stateDir}/pending-push.diff`;
+      writeFileSync(reviewFile, review);
+      log.info(`完整 diff 已写入 ${reviewFile}`);
+      if (!skipConfirm && !reviewPushDiff(mirror, baseTree, built.tree, /\S/.test(metaDiff))) {
+        openInEditor([reviewFile]);
+      }
+    }
+    if (/\S/.test(metaStat)) {
+      log.info("元数据变化:");
+      for (const line of metaStat.split("\n")) {
+        log.info(`  ${line}`);
+      }
+    }
+    if (!skipConfirm && !await confirm("发布这份选择后的快照到远程仓库?")) {
+      die("已取消,未推送");
+    }
+    const hasMetaChanges = !gitCapture(["-C", mirror, "diff", "--cached", "--quiet"]).ok;
+    if (!built.commit && built.tree === baseTree && !hasMetaChanges) {
+      log.info("没有实际变化,未推送");
+      executeStatus(false);
+      return;
+    }
+    if (hasMetaChanges) {
+      if (!git(["-C", mirror, "commit", "-S", "-m", `sync selected from ${hostnameSafe()} @ ${iso8601()}`])) {
+        die("本地提交签名失败,未推送");
+      }
+    } else {
+      log.info("没有新的元数据变化;只发布已构造的 dotfiles 提交");
+    }
+    const reviewedCommit = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", "HEAD"]);
+    const reviewedTree = headTree(mirror);
+    if (!reviewedCommit || !reviewedTree) {
+      die("无法读取已审阅的提交");
+    }
+    const currentMain = refreshRemoteMain(mirror, branch);
+    if (remoteMain !== currentMain) {
+      die("远程 metadata 在审阅期间变化;请重新运行 push");
+    }
+    const currentDot = fetchRemoteDotfiles(dotOriginUrl(), dotBranch());
+    if (currentDot.commit !== dot.commit || currentDot.tree !== dot.tree) {
+      die("远程 dotfiles 在审阅期间变化;请重新运行 push");
+    }
+    const treeToSign = await reviewMergedTree(mirror, reviewedCommit, reviewedTree, skipConfirm);
+    signReviewedTip(mirror, treeToSign);
+    assertMiseHead(mirror, built.tree);
+    if (built.commit) {
+      if (!importDotfilesCommit(mirror, built.commit)) {
+        die("无法把 dotfiles 提交导入 metadata 镜像");
+      }
+    }
+    const mirrorUrl = gitOut(["-C", mirror, "remote", "get-url", "origin"]) ?? "";
+    if (built.commit && normalizedRemote(mirrorUrl) !== normalizedRemote(dotOriginUrl())) {
+      die("选择性 push 目前要求 metadata 与 dotfiles 在同一个远程仓库");
+    }
+    const pushArgs = ["-C", mirror, "push", "--quiet", "--atomic"];
+    if (remoteMain) {
+      pushArgs.push(`--force-with-lease=refs/heads/${branch}:${remoteMain}`);
+    }
+    if (dot.commit) {
+      pushArgs.push(`--force-with-lease=refs/heads/${dotBranch()}:${dot.commit}`);
+    }
+    pushArgs.push("origin", `HEAD:${branch}`);
+    if (built.commit) {
+      pushArgs.push(`refs/omarsync/dotfiles-publish:refs/heads/${dotBranch()}`);
+    }
+    if (!git(pushArgs)) {
+      die("atomic push 失败;远程未改变");
+    }
+    log.info(`已原子推送 ${branch}${built.commit ? ` 和 ${dotBranch()}` : ""}`);
+    if (!originConnected()) {
+      const connected = connect(dotOriginUrl(), dotBranch());
+      if (connected.ok) {
+        log.info(`已连接 mise dot origin 分支 ${dotBranch()}`);
+      } else {
+        log.warn("dotfiles 已发布,但 mise origin 仍未连接;重新运行 setup 即可");
+      }
+    }
+    notify("omarsync", `已推送 ${configGet("REPO", readTextFile) ?? ""}`);
+    executeStatus(false);
+  } finally {
+    rmrf(localTmp);
   }
-  notify("omarsync", `已推送 ${configGet("REPO", readTextFile) ?? ""}`);
+}
+
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+function fetchRemoteTip(mirror, branch) {
+  if (!git(["-C", mirror, "fetch", "--quiet", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`])) {
+    die("fetch 失败,未签名也未推送");
+  }
+  const tip = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", `origin/${branch}^{commit}`]);
+  if (!isFullSha(tip)) {
+    die("远程分支没有完整提交,未签名也未推送");
+  }
+  return tip;
+}
+function reviewSnapshot(mirror, sha) {
+  const history = gitOut(["-C", mirror, "rev-list", sha]);
+  if (history === void 0) {
+    die("读不到远程历史,未签名也未推送");
+  }
+  const ancestors = history.split("\n").filter((line) => line !== "");
+  const base = ancestors.find((commit) => commitIsTrusted(mirror, commit)) ?? EMPTY_TREE;
+  const range = base === EMPTY_TREE ? sha : `${base}..${sha}`;
+  const commits = gitCapture(["-C", mirror, "log", "--format=%H %s", range]);
+  if (!commits.ok) {
+    die("无法读取远程提交历史,未签名也未推送");
+  }
+  if (/\S/.test(commits.out)) {
+    log.info("待审阅的远程提交:");
+    for (const line of commits.out.trimEnd().split("\n")) {
+      log.info(`  ${line}`);
+    }
+  }
+  if (reviewWithVsCode(["-C", mirror, base, sha])) {
+    return;
+  }
+  const diff = gitCapture(["-C", mirror, "diff", "--full-index", "--stat", "--patch", "--no-color", base, sha]);
+  if (!diff.ok) {
+    die("无法生成远程快照审阅 diff,未签名也未推送");
+  }
+  mkdirSync(paths.stateDir, { recursive: true });
+  const reviewFile = `${paths.stateDir}/repair-remote.diff`;
+  const origin = base === EMPTY_TREE ? "没有可信祖先;以下 diff 覆盖完整快照" : `可信祖先: ${base}`;
+  writeFileSync(reviewFile, `===== 待审阅的远程提交 =====
+${commits.out}
+
+===== ${origin} =====
+${diff.out}`);
+  log.info(`完整远程快照 diff 已写入 ${reviewFile}`);
+  openInEditor([reviewFile]);
+}
+async function executeRepairRemote(commit) {
+  if (!isDir(`${paths.mirrorDir}/.git`)) {
+    die("未初始化。运行: omarsync init");
+  }
+  if (!isFullSha(commit)) {
+    die("用法: omarsync repair-remote --commit <远程尖端的40位sha>");
+  }
+  const mirror = paths.mirrorDir;
+  const branch = configGet("BRANCH", readTextFile) ?? "main";
+  const remoteTip = fetchRemoteTip(mirror, branch);
+  if (commit !== remoteTip) {
+    die(`指定提交不是当前远程尖端 ${remoteTip};拒绝为旧提交或其他提交签名`);
+  }
+  if (commitIsTrusted(mirror, commit)) {
+    log.info("远程尖端已是可信签名,无需修复");
+    return;
+  }
+  reviewSnapshot(mirror, commit);
+  if (!await confirm("确认你已审阅这份完整远程快照,用本机密钥补签名并推送?")) {
+    die("已取消,未签名也未推送");
+  }
+  if (fetchRemoteTip(mirror, branch) !== commit) {
+    die("审阅期间远程尖端变了,未签名也未推送");
+  }
+  ensurePushSigner();
+  const tree = gitOut(["-C", mirror, "rev-parse", "--verify", `${commit}^{tree}`]);
+  if (!isFullSha(tree)) {
+    die("读不到已审阅的树,未签名也未推送");
+  }
+  const signed = gitOut([
+    "-C",
+    mirror,
+    "commit-tree",
+    "-S",
+    tree,
+    "-p",
+    commit,
+    "-m",
+    `trust reviewed remote snapshot from ${hostnameSafe()} @ ${iso8601()}`
+  ]);
+  if (!isFullSha(signed) || !commitIsTrusted(mirror, signed)) {
+    die("签名提交创建或校验失败,未推送");
+  }
+  if (gitOut(["-C", mirror, "rev-parse", "--verify", `${signed}^{tree}`]) !== tree || gitOut(["-C", mirror, "rev-parse", "--verify", `${signed}^`]) !== commit) {
+    die("签名没有覆盖已审阅的远程快照,未推送");
+  }
+  if (!git(["-C", mirror, "push", "--quiet", "origin", `${signed}:refs/heads/${branch}`])) {
+    die("git push 失败,远程可能已变化;未覆盖远程");
+  }
+  fetchRemoteTip(mirror, branch);
+  log.info("已为审阅过的远程快照补签名;现在运行 omarsync push 发布本地提交");
   executeStatus(false);
 }
 
@@ -7480,12 +9011,17 @@ function executeSetup() {
   if (!ghLoggedIn()) {
     executeLogin();
   }
+  ensurePushIgnore();
   if (!isDir(`${paths.mirrorDir}/.git`)) {
     executeInit(void 0);
   } else {
     ensureDotfilesRepo();
   }
-  const sha = gitOut(["-C", paths.mirrorDir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main^{commit}"]);
+  const branch = configGet("BRANCH", readTextFile) ?? "main";
+  if (isDir(`${paths.mirrorDir}/.git`) && !git(["-C", paths.mirrorDir, "fetch", "--quiet", "origin", branch])) {
+    log.warn(`无法刷新远程分支 ${branch};当前提示可能仍是旧状态`);
+  }
+  const sha = gitOut(["-C", paths.mirrorDir, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}^{commit}`]);
   if (sha) {
     log.info(`仓库已有 commit ${sha}`);
     log.info("打开面板选择 apply(先审阅再应用)");
@@ -7493,6 +9029,27 @@ function executeSetup() {
     log.info("仓库是空的");
     log.info("打开面板选择 push");
   }
+  executeStatus(false);
+}
+
+async function executeTrustSigner(commit, yes) {
+  if (!isDir(`${paths.mirrorDir}/.git`)) {
+    die("未初始化。运行: omarsync init");
+  }
+  if (!isFullSha(commit)) {
+    die("用法: omarsync trust-signer --commit <远程尖端的40位sha>");
+  }
+  const mirror = paths.mirrorDir;
+  const branch = configGet("BRANCH", readTextFile) ?? "main";
+  if (!git(["-C", mirror, "fetch", "--quiet", "origin", branch])) {
+    die("fetch 失败,未修改信任名单");
+  }
+  const tip = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", `origin/${branch}^{commit}`]);
+  if (tip !== commit) {
+    die(`指定提交不是当前远程尖端 ${tip ?? "?"};拒绝信任旧提交或其他提交`);
+  }
+  await trustRemoteSigner(mirror, commit, yes);
+  executeStatus(false);
 }
 
 const cli = a$1("omarsync", {
@@ -7578,6 +9135,20 @@ cli.addCommand({
   }
 });
 cli.addCommand({
+  name: "repair-remote",
+  description: "审阅旧的不可信远程快照,确认后补一个树不变的签名提交并推送",
+  options: [
+    {
+      name: "commit",
+      type: String,
+      description: "要审阅的当前远程尖端40位commit sha(必填)"
+    }
+  ],
+  execute: async ({ options }) => {
+    await executeRepairRemote(typeof options["commit"] === "string" ? options["commit"] : void 0);
+  }
+});
+cli.addCommand({
   name: "migrate",
   description: "老格式迁移:当前提交须已可信签名,确认剩余文件后才删除 home/ 并签名推送",
   execute: async () => {
@@ -7629,6 +9200,28 @@ cli.addCommand({
   description: "列出 mise dot 同步冲突,用本机编辑器打开审阅",
   execute: () => {
     executeConflicts();
+  }
+});
+cli.addCommand({
+  name: "trust-signer",
+  description: "从远程提交自带的签名提取公钥,核对指纹后加入信任名单(无需手动拷贝公钥)",
+  options: [
+    {
+      name: "commit",
+      type: String,
+      description: "远程尖端的 40 位 commit sha(必填)"
+    },
+    {
+      name: "yes",
+      type: Boolean,
+      description: "跳过指纹确认(仅供自动化)"
+    }
+  ],
+  execute: async ({ options }) => {
+    await executeTrustSigner(
+      typeof options["commit"] === "string" ? options["commit"] : void 0,
+      options["yes"] === true
+    );
   }
 });
 cli.addCommand({

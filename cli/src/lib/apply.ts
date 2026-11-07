@@ -2,6 +2,7 @@ import { mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 
+import { reviewWithVsCode } from "./diff-review";
 import { openInEditor } from "./editor";
 import { capture, exists, isDir, isFile, isLink, mktempDir, realpath, resolveTool, rmrf } from "./exec";
 import { gitCapture, gitOut } from "./git";
@@ -12,6 +13,7 @@ import { omarchy, omarchyShell, rsync, BACKUP_KEEP, dotBranch, dotOriginUrl } fr
 import { installMissingPackages } from "./packages";
 import { paths } from "./paths";
 import { installMissingPlugins } from "./plugins";
+import { removeRemoteIgnoredPaths, restoreIgnoredPaths, stashIgnoredPaths } from "./ignored-files";
 import { readScope } from "./scope";
 import { appliedStampFile, isFullSha } from "./trust";
 
@@ -20,6 +22,9 @@ import { appliedStampFile, isFullSha } from "./trust";
 // 1:1 移植自 src/apply.lua。
 
 const HOME = homedir();
+
+// git 内置空树对象:首次应用没有上次基准时,用它作 diff 起点展示完整快照
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 export function pruneBackups(): void {
     const root = paths.backupDir;
@@ -77,6 +82,61 @@ export function backupTree(): string {
     return dest;
 }
 
+/** 壁纸记录里的路径都相对于主题、共享背景目录或远端绝对路径。
+ *  `abs:` 可能来自另一台机器;主机名不同的绝对路径优先回退到当前主题里的同名文件。 */
+function themeBackgroundCandidates(theme: string, rel: string): string[] {
+    if (theme === "") {
+        return [];
+    }
+
+    return [
+        `${HOME}/.local/state/omarchy/current/theme/${rel}`,
+        `${HOME}/.config/omarchy/themes/${theme}/${rel}`,
+        `${process.env["OMARCHY_PATH"] ?? "/usr/share/omarchy"}/themes/${theme}/${rel}`,
+    ];
+}
+
+/** 从外部机器的绝对路径里提取主题内相对路径,例如 backgrounds/1.jpg */
+function foreignThemeRelative(path: string): string | undefined {
+    for (const marker of ["/.local/state/omarchy/current/theme/", "/.local/share/omarchy/themes/"]) {
+        const index = path.indexOf(marker);
+
+        if (index !== -1) {
+            const rest = path.slice(index + marker.length);
+            const slash = rest.indexOf("/");
+
+            // current/theme 后面的整段就是主题相对路径;
+            // themes/<name>/ 要跳过第一段主题名。
+            return marker.includes("/current/theme/") ? rest : (slash === -1 ? undefined : rest.slice(slash + 1));
+        }
+    }
+
+    return undefined;
+}
+
+/** 按记录解析壁纸路径;优先使用本机存在的文件,失败时返回首个候选供日志展示 */
+function resolveBackgroundTarget(theme: string, background: string): string {
+    const candidates: string[] = [];
+
+    if (background.startsWith("rel:")) {
+        candidates.push(`${HOME}/.config/omarchy/backgrounds/${background.slice(5)}`);
+    } else if (background.startsWith("theme:")) {
+        candidates.push(...themeBackgroundCandidates(theme, background.slice(6)));
+    } else if (background.startsWith("abs:")) {
+        const absolute = background.slice(4);
+
+        candidates.push(absolute);
+
+        const rel = foreignThemeRelative(absolute);
+
+        if (rel !== undefined && !isFile(absolute)) {
+            candidates.push(...themeBackgroundCandidates(theme, rel));
+        }
+    }
+
+    return candidates.find((path) => isFile(path)) ?? candidates[0] ?? "";
+}
+
 /** 应用主题与壁纸(在线模式调用 omarchy;OMARSYNC_SKIP_LIVE=1 时只写状态文件)。
  *  在线的 `omarchy theme set` 会跑 ~/.config/omarchy/hooks,所以不可信的 apply 跳过它。 */
 export function applyCurrent(mirror: string, withExec: boolean): boolean {
@@ -84,13 +144,6 @@ export function applyCurrent(mirror: string, withExec: boolean): boolean {
     const background = (readTextFile(`${mirror}/current/background`) ?? "").replaceAll(/\s+/g, "");
 
     const state = `${HOME}/.local/state/omarchy/current`;
-    let target = "";
-
-    if (background.startsWith("rel:")) {
-        target = `${HOME}/.config/omarchy/backgrounds/${background.slice(4)}`;
-    } else if (background.startsWith("abs:")) {
-        target = background.slice(4);
-    }
 
     if (process.env["OMARSYNC_SKIP_LIVE"] === "1") {
         mkdirSync(state, { recursive: true });
@@ -99,7 +152,9 @@ export function applyCurrent(mirror: string, withExec: boolean): boolean {
             writeFileSync(`${state}/theme.name`, `${theme}\n`);
         }
 
-        if (target !== "" && exists(target)) {
+        const target = resolveBackgroundTarget(theme, background);
+
+        if (target !== "" && isFile(target)) {
             rmrf(`${state}/background`);
             symlinkSync(target, `${state}/background`);
         }
@@ -126,8 +181,11 @@ export function applyCurrent(mirror: string, withExec: boolean): boolean {
         }
     }
 
-    if (target !== "") {
-        if (exists(target)) {
+    // 主题设置会重建 current/theme,所以壁纸必须在这之后解析。
+    if (background !== "") {
+        const target = resolveBackgroundTarget(theme, background);
+
+        if (target !== "" && exists(target)) {
             log.info(`设置壁纸 ${target}`);
 
             if (!omarchy(["theme", "bg", "set", target])) {
@@ -135,8 +193,7 @@ export function applyCurrent(mirror: string, withExec: boolean): boolean {
                 failed = true;
             }
         } else {
-            log.warn(`壁纸文件不存在: ${target}`);
-            failed = true;
+            log.warn(`壁纸文件不存在,保留当前壁纸: ${target}`);
         }
     }
 
@@ -301,9 +358,9 @@ function signedMiseHead(mirror: string): string | undefined {
 
     try {
         const data = JSON.parse(raw) as { miseHead?: unknown };
-        const head = data.miseHead;
+        const head = typeof data.miseHead === "string" ? data.miseHead : undefined;
 
-        return isFullSha(typeof head === "string" ? head : undefined) ? head : undefined;
+        return isFullSha(head) ? head : undefined;
     } catch {
         return undefined;
     }
@@ -326,12 +383,42 @@ export function syncDotfiles(mirror: string): boolean {
         return false;
     }
 
-    const commit = mise.commitForSnapshot(snapshot);
+    let commit = mise.commitForSnapshot(snapshot);
 
     if (!commit) {
         log.warn(`已抓取的历史里没有签名的 miseHead ${snapshot};拒绝应用分支尖端`);
 
         return false;
+    }
+
+    // fetch 只会把远程提交放进 Git 对象库;mise 的 rollback 只认已导入索引的 checkpoint。
+    // 仅当远程尖端与签名快照是同一棵树时,才采用远程版本完成导入,避免写入可变尖端。
+    if (!mise.checkpointIndexed(commit)) {
+        const upstream = mise.upstreamSnapshot();
+
+        if (upstream !== snapshot) {
+            log.warn("远程 dotfiles 尖端与签名快照不一致;拒绝导入可变的远端版本");
+
+            return false;
+        }
+
+        log.info("签名快照尚未导入 mise 历史;采用远程版本并解决本机冲突");
+
+        const pulled = mise.pull({ takeRemoteAll: true });
+
+        if (!pulled.ok) {
+            log.warn(`mise pull 导入快照失败: ${pulled.out}`);
+
+            return false;
+        }
+
+        commit = mise.commitForSnapshot(snapshot);
+
+        if (!commit || !mise.checkpointIndexed(commit)) {
+            log.warn(`mise pull 后仍找不到 checkpoint ${snapshot}`);
+
+            return false;
+        }
     }
 
     log.info(`按签名的 miseHead ${snapshot} 恢复文件`);
@@ -357,8 +444,22 @@ export function applyMirror(mirror: string, withPackages: boolean, sha: string, 
 
     let failed = false;
     const hooksStash = withExec ? undefined : stashOmarchyHooks();
+    const ignoredStash = stashIgnoredPaths();
+    let filesOk = false;
 
-    const filesOk = syncDotfiles(mirror);
+    try {
+        filesOk = syncDotfiles(mirror);
+
+        if (filesOk) {
+            const snapshot = signedMiseHead(mirror);
+
+            if (snapshot) {
+                removeRemoteIgnoredPaths(ignoredStash, snapshot);
+            }
+        }
+    } finally {
+        restoreIgnoredPaths(ignoredStash);
+    }
 
     if (!filesOk) {
         failed = true;
@@ -408,39 +509,43 @@ export function applyMirror(mirror: string, withPackages: boolean, sha: string, 
     return !failed;
 }
 
-/** 合并前审查:显示自上次应用以来元数据仓库里的全部更改(只读) */
+/** 合并前审查:显示自上次应用以来元数据仓库里的全部更改(只读)。
+ *  首次应用没有基准 commit,用空树作起点,照样弹 VS Code 展示完整快照,不跳过审阅。 */
 export function showChanges(mirror: string, sha: string): void {
     const applied = (readTextFile(appliedStampFile()) ?? "").trim();
 
+    let base: string;
+    let firstApply = false;
+
     if (!isFullSha(applied)) {
-        log.info("没有应用过的 commit;这份快照将整体应用");
-
-        return;
-    }
-
-    if (applied === sha) {
+        base = EMPTY_TREE;
+        firstApply = true;
+        log.info("没有应用过的 commit;首次应用,下面展示完整快照供审阅");
+    } else if (applied === sha) {
         log.info("这台机器已经应用过这个 commit");
 
         return;
-    }
-
-    if (!gitCapture(["-C", mirror, "cat-file", "-e", `${applied}^{commit}`]).ok) {
+    } else if (!gitCapture(["-C", mirror, "cat-file", "-e", `${applied}^{commit}`]).ok) {
         log.info(`上次应用的 commit ${applied} 不在镜像里;无法 diff`);
 
         return;
+    } else {
+        base = applied;
+        log.info(`自上次应用的 commit ${applied.slice(0, 12)} 以来的更改:`);
     }
 
-    log.info(`自上次应用的 commit ${applied.slice(0, 12)} 以来的更改:`);
+    // 首次是全量快照,提交历史可能很长,不逐条打印;常规增量才列出 commit 清单
+    if (!firstApply) {
+        const logOut = gitOut(["-C", mirror, "log", "--oneline", "--no-decorate", `${base}..${sha}`]);
 
-    const logOut = gitOut(["-C", mirror, "log", "--oneline", "--no-decorate", `${applied}..${sha}`]);
-
-    if (logOut && /\S/.test(logOut)) {
-        for (const line of logOut.split("\n")) {
-            log.info(`  commit ${line}`);
+        if (logOut && /\S/.test(logOut)) {
+            for (const line of logOut.split("\n")) {
+                log.info(`  commit ${line}`);
+            }
         }
     }
 
-    const stat = gitOut(["-C", mirror, "diff", "--stat", applied, sha]);
+    const stat = gitOut(["-C", mirror, "diff", "--stat", base, sha]);
 
     if (stat && /\S/.test(stat)) {
         for (const line of stat.split("\n")) {
@@ -450,12 +555,12 @@ export function showChanges(mirror: string, sha: string): void {
         log.info("  (元数据无变化)");
     }
 
-    // 关键文本文件给出完整 diff,必须能逐行看到改了什么;
-    // 同时汇总写进 pending-apply.diff 并用用户的编辑器打开审阅
+    // 关键文本文件给出完整 diff,必须能逐行看到改了什么。
+    const reviewFiles = ["plugins.json", "packages/pacman.txt", "packages/flatpak.txt", "current/theme.name", "current/background"];
     let review = "";
 
-    for (const file of ["plugins.json", "packages/pacman.txt", "packages/flatpak.txt", "current/theme.name", "current/background"]) {
-        const d = gitOut(["-C", mirror, "diff", "--color=never", applied, sha, "--", file]);
+    for (const file of reviewFiles) {
+        const d = gitOut(["-C", mirror, "diff", "--color=never", base, sha, "--", file]);
 
         if (d && /\S/.test(d)) {
             process.stdout.write(`${d}\n`);
@@ -464,9 +569,15 @@ export function showChanges(mirror: string, sha: string): void {
     }
 
     if (review !== "") {
-        const reviewFile = `${paths.stateDir}/pending-apply.diff`;
+        // 优先 VS Code 左右 Diff Editor;无图形环境(如纯 SSH)再回退文本 diff。
+        if (reviewWithVsCode(["-C", mirror, base, sha, "--", ...reviewFiles])) {
+            return;
+        }
 
-        writeFileSync(reviewFile, `自 ${applied} 到 ${sha} 的元数据更改\n\n${review}`);
+        const reviewFile = `${paths.stateDir}/pending-apply.diff`;
+        const heading = firstApply ? "首次应用(完整快照)" : `自 ${base} 到 ${sha}`;
+
+        writeFileSync(reviewFile, `${heading} 的元数据更改\n\n${review}`);
         log.info(`完整 diff 已写入 ${reviewFile}`);
         openInEditor([reviewFile]);
     }

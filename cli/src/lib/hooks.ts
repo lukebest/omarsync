@@ -125,11 +125,14 @@ export function refreshUserServices(): boolean {
         return true;
     }
 
-    let okAll = true;
+    const systemdEnv = [`XDG_RUNTIME_DIR=${runtime}`];
+
+    if (process.env["DBUS_SESSION_BUS_ADDRESS"]) {
+        systemdEnv.push(`DBUS_SESSION_BUS_ADDRESS=${process.env["DBUS_SESSION_BUS_ADDRESS"]}`);
+    }
 
     if (!run(systemctl, ["--user", "daemon-reload"])) {
         log.warn("systemctl --user daemon-reload 失败");
-        okAll = false;
     }
 
     // 启动 *.target.wants 里链接的 service
@@ -139,13 +142,22 @@ export function refreshUserServices(): boolean {
         : "";
 
     for (const unit of out.split("\n")) {
-        if (unit.endsWith(".service")) {
-            if (!run(systemctl, ["--user", "start", unit])) {
-                log.warn(`无法启动 ${unit}`);
-                okAll = false;
-            }
+        if (!unit.endsWith(".service")) {
+            continue;
+        }
+
+        // 依赖 AUR 包的服务在未安装该包时本来就加载不到,不应让整个 apply 失败。
+        const loadState = capture(systemctl, ["--user", "show", "-p", "LoadState", "--value", unit], systemdEnv).stdout.trim();
+
+        if (loadState === "not-found") {
+            log.warn(`跳过未安装的服务 ${unit}`);
+            continue;
+        }
+
+        if (!run(systemctl, ["--user", "start", unit])) {
+            log.warn(`无法启动 ${unit};配置已同步,可稍后手动处理`);
         }
     }
 
-    return okAll;
+    return true;
 }

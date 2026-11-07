@@ -299,34 +299,32 @@ export function acceptFirstApply(mirror: string, sha: string): void {
     log.info("之后的 apply 需要可信签名");
 }
 
-/** 没有信任密钥的机器可以钉住这一个提交的签名者;
- *  之后来自其他密钥的提交仍被拒绝。 */
-export async function trustSignerOfCommit(mirror: string, sha: string, allowPrompt: boolean): Promise<void> {
+/** 信任远程提交自带的签名者:公钥从提交的 gpgsig 头提取,必须能验签本提交,
+ *  人工核对指纹后才写入信任名单。本机已有其他信任密钥时也允许追加——
+ *  多台机器各有签名密钥,每把都需要独立的信任决策。 */
+export async function trustRemoteSigner(mirror: string, sha: string, allowPrompt: boolean): Promise<void> {
     const pub = signaturePubkeyLine(mirror, sha);
     const fp = pub ? fingerprintOfPubkeyLine(pub) : undefined;
 
-    if (trustedKeysPresent()) {
-        if (fp) {
-            die(`提交 ${sha} 由 ${fp} 签名,不在 ${paths.trustedKeysFile} 里。拒绝应用。`);
-        }
-
-        die(`提交 ${sha} 不是由 ${paths.trustedKeysFile} 里的密钥签名的。拒绝应用。`);
+    if (!pub || !fp || !pubkeyVerifiesCommit(mirror, sha, pub)) {
+        die(`提交 ${sha} 未签名,或自带公钥验签失败。拒绝信任。`);
     }
 
-    if (!pub || !fp || !pubkeyVerifiesCommit(mirror, sha, pub)) {
-        die(`提交 ${sha} 未签名。拒绝应用。`);
+    if (commitIsTrusted(mirror, sha)) {
+        log.info(`签名者 ${fp} 已在信任名单中,无需重复添加`);
+
+        return;
     }
 
     if (!allowPrompt) {
         if (stdinIsTty()) {
-            log.info("这台机器还没有信任过签名密钥");
-            log.info(`提交 ${sha} 由 ${fp} 签名`);
+            log.info(`提交 ${sha} 的签名者指纹: ${fp}`);
 
-            if (!(await confirm("信任这把密钥并应用?"))) {
+            if (!(await confirm("确认信任这把密钥?"))) {
                 die("未信任该签名密钥");
             }
         } else {
-            die(`提交 ${sha} 由 ${fp} 签名,而本机还没信任过签名密钥。在终端里运行 apply 并确认,或加 --trust-signer。`);
+            die(`需要在终端里核对指纹 ${fp} 并确认,或加 --yes 跳过确认。`);
         }
     }
 
@@ -530,6 +528,7 @@ export function ensurePushSigner(): void {
 /** 远程尖端必须已由可信密钥签名。没有这道检查就不能变基,也不能补签名。 */
 export function requireTrustedRemoteTip(mirror: string, sha: string): void {
     if (!commitIsTrusted(mirror, sha)) {
+        log.info(`如已确认这是你的快照,可审阅后补签名: omarsync repair-remote --commit ${sha}`);
         die(`远程提交 ${sha} 不是可信签名。拒绝合并,也不会为它签名。`);
     }
 }

@@ -24,14 +24,15 @@
    │
    ▼
 omarsync push
-   ├─ 1. reconcile：track 集合对齐【本机 scope】（远程永远改不了本机 track 什么）
-   ├─ 2. mise dot save  ──────★ 手动存：先把当前状态显式存成检查点
-   │        └─ 无变化 → 跳过；失败 → 中止,不推半成品
-   ├─ 3. 采集元数据 → 签名提交 → push 元数据仓库
-   │        （插件按 plugins-skip 过滤；机器相关文件不进快照）
-   └─ 4. mise dot sync 发布 dotfiles 历史
-          └─ 冲突 → 停下报错,由【本机】决定：
-               mise dot pull --keep-local 〈我的赢〉 / --take-remote 〈它的赢〉
+   ├─ 1. reconcile：track 集合对齐【本机 scope + push-ignore】
+   ├─ 2. mise dot save  ──────★ 先把当前本机状态显式存成检查点
+   ├─ 3. ★ 选择：远程签名快照 vs 本机快照的真实差异
+   │        VSCode 打开 pending-push.selection：文件/插件逐项、包按组
+   │        [x] 发布；删除默认不选；push-ignore 内容不出现
+   ├─ 4. 构造选择性 dotfiles 树：以远程树为 base，只覆盖勾选项
+   │        → 构造签名 metadata（miseHead = 新树）
+   │        → atomic push 同时更新 main + dotfiles
+   └─ push --yes：不弹选择/编辑器，默认发布新增+修改，保留删除
 ```
 
 ## 拉（pull）与 应用（apply）——拉之后先审阅再应用
@@ -72,7 +73,9 @@ omarsync apply --commit <40位sha>
 |---|---|---|
 | 同步哪些目录 | 本机 scope（仓库里的 scope 文件直接丢弃） | `~/.config/omarsync/scope` |
 | 哪些文件因机而异 | 本机 scope 排除（monitors/input/envs 默认排除） | 同上 |
-| 哪些插件不同步 | 本机 plugins-skip（不导出也不安装） | `~/.config/omarsync/plugins-skip` |
+| 哪些插件不同步 | 本机 plugins-skip + push-ignore 的 `plugin:`（不导出也不安装） | `~/.config/omarsync/plugins-skip`、`push-ignore` |
+| 哪些路径/包不同步 | 本机 push-ignore（双向忽略；不发布也不被远程覆盖） | `~/.config/omarsync/push-ignore` |
+| 本次发布什么 | VSCode 清单逐项勾选；删除默认不选 | `~/.local/state/omarsync/pending-push.selection` |
 | 是否应用这次合并 | 本机看完 diff 后输 y；无终端=拒绝 | 终端 |
 | 信任哪个签名者 | 本机 trusted-keys（TOFU 首用即钉） | `~/.config/omarsync/trusted-keys` |
 | 冲突谁赢 | 本机逐条 keep-local / take-remote | mise dot conflicts |
@@ -80,5 +83,5 @@ omarsync apply --commit <40位sha>
 ## 已定
 
 1. `pull` 只抓取，`apply` 负责审阅和写入。
-2. `push` 会把元数据 diff 和 `mise dot diff` 交给编辑器，并要求在终端输入 y。`push --yes` 只给面板的自动推送。
+2. `push` 会打开逐项选择清单，保存后要求终端输入 y，再展示最终 diff 二次确认。`push --yes` 不弹选择，默认发布新增/修改并保留删除，只给面板的自动推送。
 3. `omarsync conflicts` 列出 mise 冲突并用本机编辑器打开。

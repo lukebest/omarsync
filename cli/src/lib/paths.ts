@@ -17,6 +17,7 @@ export const paths = {
     backupDir: join(HOME, ".local", "state", "omarsync", "backup"),
     scopeFile: join(HOME, ".config", "omarsync", "scope"),
     pluginsSkipFile: join(HOME, ".config", "omarsync", "plugins-skip"),
+    pushIgnoreFile: join(HOME, ".config", "omarsync", "push-ignore"),
     trustedKeysFile: join(HOME, ".config", "omarsync", "trusted-keys"),
     appliedStamp: join(HOME, ".local", "state", "omarsync", "applied"),
     lastLog: join(HOME, ".local", "state", "omarsync", "last.log"),

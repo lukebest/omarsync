@@ -180,10 +180,18 @@ else
   bad "apply 仍钉住签名的 miseHead"
 fi
 
-if grep -q 'requireTrustedRemoteTip(mirror, remoteTip)' "$ROOT/cli/src/commands/push.ts"; then
-  ok "push 仍在变基前验远程尖端"
+if grep -q 'requireTrustedRemoteTip(mirror, tip)' "$ROOT/cli/src/commands/push.ts" \
+  && grep -q -- '--atomic' "$ROOT/cli/src/commands/push.ts"; then
+  ok "push 仍在发布前验远程尖端"
 else
-  bad "push 仍在变基前验远程尖端"
+  bad "push 仍在发布前验远程尖端"
+fi
+
+if ! grep -q 'mise\.save()' "$ROOT/cli/src/commands/status.ts" \
+  && grep -q 'unsavedFiles()' "$ROOT/cli/src/commands/status.ts"; then
+  ok "status 只读探测 mise 改动,不创建检查点"
+else
+  bad "status 只读探测 mise 改动,不创建检查点"
 fi
 
 if grep -q '签名并发布去掉 home/ 之后的这棵树' "$ROOT/cli/dist/index.js" \
@@ -236,6 +244,59 @@ run_cli() {
   printf '%s' "$rc"
 }
 
+run_confirmed_cli() {
+  local home=$1 log=$2
+  shift 2
+  set +e
+  python3 - "$CLI" "$home" "$log" "$@" <<'PY'
+import os, pty, select, subprocess, sys, time
+
+cli, home, log_path, *args = sys.argv[1:]
+master, slave = pty.openpty()
+env = os.environ.copy()
+env["HOME"] = home
+env["OMARSYNC_EDITOR"] = "true"
+proc = subprocess.Popen([cli, *args], stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True)
+os.close(slave)
+buf = b""
+sent = False
+end = time.monotonic() + 25
+while time.monotonic() < end:
+    if proc.poll() is not None:
+        while select.select([master], [], [], 0)[0]:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                chunk = b""
+            if not chunk:
+                break
+            buf += chunk
+        break
+    ready, _, _ = select.select([master], [], [], 0.2)
+    if not ready:
+        continue
+    try:
+        chunk = os.read(master, 4096)
+    except OSError:
+        break
+    if not chunk:
+        continue
+    buf += chunk
+    if not sent and b"[y/N]" in buf:
+        os.write(master, b"y\n")
+        sent = True
+else:
+    proc.kill()
+proc.wait(timeout=5)
+with open(log_path, "wb") as handle:
+    handle.write(buf)
+sys.exit(0 if sent and proc.returncode == 0 else proc.returncode or 1)
+PY
+  local rc=$?
+  set -e
+  return "$rc"
+}
+
 pull_home="$TMP/pull"
 setup_key "$pull_home" "$pull_home/key"
 init_mirror "$pull_home" "$pull_home/key"
@@ -285,6 +346,32 @@ if [[ $migrate_rc -ne 0 && $(git -C "$pull_mirror" rev-parse HEAD) == "$unsigned
   ok "migrate 拒绝签名未验证的 home/ 树"
 else
   bad "migrate 拒绝签名未验证的 home/ 树"
+fi
+
+repair_rc=$(run_cli "$pull_home" repair-remote --commit "$unsigned_tip")
+if [[ $repair_rc -ne 0 && $(git -C "$pull_home/origin.git" rev-parse main) == "$unsigned_tip" ]]; then
+  ok "repair-remote 非交互时拒绝补签名"
+else
+  bad "repair-remote 非交互时拒绝补签名"
+fi
+repair_rc=0
+run_confirmed_cli "$pull_home" "$TMP/repair.log" repair-remote --commit "$unsigned_tip" || repair_rc=$?
+repaired_tip=$(git -C "$pull_home/origin.git" rev-parse main)
+if [[ $repair_rc -ne 0 ]] \
+  || [[ $(git -C "$pull_mirror" rev-parse "$repaired_tip^") != "$unsigned_tip" ]] \
+  || [[ $(git -C "$pull_mirror" rev-parse "$repaired_tip^{tree}") != $(git -C "$pull_mirror" rev-parse "$unsigned_tip^{tree}") ]] \
+  || [[ $(git -C "$pull_mirror" rev-parse HEAD) != "$unsigned_tip" ]] \
+  || ! git -C "$pull_mirror" -c "gpg.ssh.allowedSignersFile=$pull_home/.config/omarsync/trusted-keys" verify-commit "$repaired_tip" >/dev/null 2>&1; then
+  bad "repair-remote 审阅后签同一棵树且不动本地 HEAD"
+  printf 'repair rc=%s\n%s\n' "$repair_rc" "$(<"$TMP/repair.log")"
+else
+  ok "repair-remote 审阅后签同一棵树且不动本地 HEAD"
+fi
+repair_status=$(HOME="$pull_home" "$CLI" status --json 2>/dev/null) || repair_status=""
+if [[ $repair_status == *'"behind":0,"ahead":0'* && $repair_status == *'"remoteSignature":"trusted"'* ]]; then
+  ok "仅签名变化的提交不显示为待同步"
+else
+  bad "仅签名变化的提交不显示为待同步"
 fi
 
 other_home="$TMP/other"
@@ -361,52 +448,8 @@ else
   bad "migrate 不把工作区里多出来的钩子签进去"
 fi
 rm -f "$keep_mirror/hooks/post-apply.d/evil.sh"
-set +e
-python3 - "$CLI" "$keep_home" "$TMP/keep-migrate.log" <<'PY'
-import os, pty, select, subprocess, sys, time
-
-cli, home, log_path = sys.argv[1:]
-master, slave = pty.openpty()
-env = os.environ.copy()
-env["HOME"] = home
-proc = subprocess.Popen([cli, "migrate"], stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True)
-os.close(slave)
-buf = b""
-sent = False
-end = time.monotonic() + 25
-while time.monotonic() < end:
-    if proc.poll() is not None:
-        while select.select([master], [], [], 0)[0]:
-            try:
-                chunk = os.read(master, 4096)
-            except OSError:
-                chunk = b""
-            if not chunk:
-                break
-            buf += chunk
-        break
-    ready, _, _ = select.select([master], [], [], 0.2)
-    if not ready:
-        continue
-    try:
-        chunk = os.read(master, 4096)
-    except OSError:
-        break
-    if not chunk:
-        continue
-    buf += chunk
-    if not sent and b"[y/N]" in buf:
-        os.write(master, b"y\n")
-        sent = True
-else:
-    proc.kill()
-proc.wait(timeout=5)
-with open(log_path, "wb") as handle:
-    handle.write(buf)
-sys.exit(0 if sent and proc.returncode == 0 else proc.returncode or 1)
-PY
-keep_yes=$?
-set -e
+keep_yes=0
+run_confirmed_cli "$keep_home" "$TMP/keep-migrate.log" migrate || keep_yes=$?
 keep_now=$(git -C "$keep_mirror" rev-parse HEAD)
 keep_diff=$(git -C "$keep_mirror" diff --name-only --no-renames "$keep_base" HEAD)
 keep_mode=$(git -C "$keep_mirror" ls-tree HEAD hooks/post-apply.d/kept.sh | awk '{print $1}')
@@ -420,6 +463,68 @@ if [[ $keep_yes -eq 0 && $keep_now != "$keep_base" \
   ok "确认后只签名去掉 home/ 的可信树"
 else
   bad "确认后只签名去掉 home/ 的可信树"
+fi
+
+# 选择性 push:临时 HOME + 本地 bare remote。默认 --yes 发布新增/修改,
+# 保留删除项和 push-ignore 内容,并断言 main.miseHead == dotfiles tree。
+sel_home="$TMP/selective"
+setup_key "$sel_home" "$sel_home/key"
+init_mirror "$sel_home" "$sel_home/key"
+mkdir -p "$sel_home/.config/selective" "$sel_home/.config/omarsync"
+printf 'a1\n' >"$sel_home/.config/selective/a.txt"
+printf 'del\n' >"$sel_home/.config/selective/del.txt"
+printf 'ignored1\n' >"$sel_home/.config/selective/ignored.txt"
+printf 'REPO=test/selective\nBRANCH=main\n' >"$sel_home/.config/omarsync/config"
+printf '.config/selective\n' >"$sel_home/.config/omarsync/scope"
+printf '.config/selective/ignored.txt\n' >"$sel_home/.config/omarsync/push-ignore"
+sel_origin="$sel_home/origin.git"
+git init -q --bare -b main "$sel_origin"
+git -C "$sel_home/.local/state/omarsync/repo" remote add origin "$sel_origin"
+sel_env=(HOME="$sel_home" XDG_CONFIG_HOME="$sel_home/.config" XDG_STATE_HOME="$sel_home/.local/state" XDG_DATA_HOME="$sel_home/.local/share" XDG_CACHE_HOME="$sel_home/.cache" OMARSYNC_DOT_ORIGIN="$sel_origin" OMARSYNC_EDITOR=true)
+env "${sel_env[@]}" mise dot track -y "$sel_home/.config/selective" >/dev/null 2>&1
+env "${sel_env[@]}" mise dot save >/dev/null 2>&1
+set +e
+env "${sel_env[@]}" /usr/bin/node "$ROOT/cli/dist/index.js" push --yes >"$sel_home/push1.log" 2>&1
+sel_rc1=$?
+set -e
+printf 'a2\n' >"$sel_home/.config/selective/a.txt"
+printf 'b1\n' >"$sel_home/.config/selective/b.txt"
+rm "$sel_home/.config/selective/del.txt"
+printf 'ignored2\n' >"$sel_home/.config/selective/ignored.txt"
+set +e
+env "${sel_env[@]}" /usr/bin/node "$ROOT/cli/dist/index.js" push --yes >"$sel_home/push2.log" 2>&1
+sel_rc2=$?
+set -e
+sel_main=$(git --git-dir="$sel_origin" show main:omarsync.json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).miseHead||"")}catch{}})')
+sel_tree=$(git --git-dir="$sel_origin" rev-parse 'dotfiles^{tree}' 2>/dev/null || true)
+if [[ $sel_rc1 -eq 0 && $sel_rc2 -eq 0 && $sel_main == "$sel_tree" \
+  && $(git --git-dir="$sel_origin" show dotfiles:home/.config/selective/a.txt 2>/dev/null) == "a2" \
+  && $(git --git-dir="$sel_origin" show dotfiles:home/.config/selective/b.txt 2>/dev/null) == "b1" \
+  && $(git --git-dir="$sel_origin" show dotfiles:home/.config/selective/del.txt 2>/dev/null) == "del" ]] \
+  && ! git --git-dir="$sel_origin" cat-file -e dotfiles:home/.config/selective/ignored.txt 2>/dev/null; then
+  ok "选择性 push:只发布选中项,保留删除和 ignored"
+else
+  bad "选择性 push:只发布选中项,保留删除和 ignored"
+  printf 'rc1=%s rc2=%s main=%s tree=%s\n%s\n' "$sel_rc1" "$sel_rc2" "$sel_main" "$sel_tree" "$(<"$sel_home/push2.log")"
+fi
+
+# 只有元数据变化、没有 dotfiles 变化时也必须真正推送 main。
+sel_old_main=$(git --git-dir="$sel_origin" rev-parse main)
+mkdir -p "$sel_home/.local/state/omarchy/current"
+printf 'test-theme\n' >"$sel_home/.local/state/omarchy/current/theme.name"
+printf 'theme:backgrounds/test.jpg\n' >"$sel_home/.local/state/omarchy/current/background"
+set +e
+env "${sel_env[@]}" /usr/bin/node "$ROOT/cli/dist/index.js" push --yes >"$sel_home/push3.log" 2>&1
+sel_rc3=$?
+set -e
+sel_new_main=$(git --git-dir="$sel_origin" rev-parse main 2>/dev/null || true)
+if [[ $sel_rc3 -eq 0 && $sel_new_main != "$sel_old_main" \
+  && $(git --git-dir="$sel_origin" rev-parse 'dotfiles^{tree}') == "$sel_tree" ]] \
+  && git --git-dir="$sel_origin" show main:current/theme.name | grep -qx 'test-theme'; then
+  ok "只有元数据变化时也会推送"
+else
+  bad "只有元数据变化时也会推送"
+  printf 'rc3=%s old=%s new=%s\n%s\n' "$sel_rc3" "$sel_old_main" "$sel_new_main" "$(<"$sel_home/push3.log")"
 fi
 
 printf '%d passed, %d failed\n' "$pass" "$fail"

@@ -6,6 +6,7 @@ import { git, gitOut } from "./git";
 import { die, log, readTextFile } from "./log";
 import { MAX_FILE_SIZE, omarchy, omarchyShell, PLUGIN_ID, rsync } from "./omarchy";
 import { paths } from "./paths";
+import { loadPushIgnore } from "./push-ignore";
 import { isFullSha } from "./trust";
 
 // 第三方 Omarchy shell 插件的导出与安装。1:1 移植自 src/plugins.lua。
@@ -39,6 +40,10 @@ export function skipSet(): Set<string> {
         if (id !== "" && !id.startsWith("#")) {
             set.add(id);
         }
+    }
+
+    for (const id of loadPushIgnore().plugins) {
+        set.add(id);
     }
 
     return set;
@@ -217,6 +222,10 @@ export function installMissingPlugins(mirror: string, allowExec: boolean): boole
     }
 
     const skip = skipSet();
+    const currentEnabled = new Set(
+        (listPlugins() ?? []).filter((row) => row.enabled === true && typeof row.id === "string").map((row) => row.id as string),
+    );
+    const toEnable = new Set<string>();
     let failed = false;
     let installedAny = false;
 
@@ -249,6 +258,10 @@ export function installMissingPlugins(mirror: string, allowExec: boolean): boole
                 if (head !== rev) {
                     log.warn(`插件 ${id} 当前在 ${head ?? "unknown"},快照记录 ${rev};保持不动`);
                 }
+            }
+
+            if (enabled && !currentEnabled.has(id)) {
+                toEnable.add(id);
             }
 
             continue;
@@ -314,8 +327,8 @@ export function installMissingPlugins(mirror: string, allowExec: boolean): boole
             log.info(`已安装插件 ${id}`);
             installedAny = true;
 
-            if (enabled && process.env["OMARSYNC_SKIP_LIVE"] !== "1" && !omarchy(["plugin", "enable", id])) {
-                log.warn(`启用插件 ${id} 失败`);
+            if (enabled) {
+                toEnable.add(id);
             }
         }
     }
@@ -323,6 +336,15 @@ export function installMissingPlugins(mirror: string, allowExec: boolean): boole
     if (installedAny && process.env["OMARSYNC_SKIP_LIVE"] !== "1" && resolveTool("omarchy-shell")) {
         if (!omarchyShell(["shell", "rescanPlugins"])) {
             log.warn("shell 插件重扫失败");
+        }
+    }
+
+    // 必须在重扫之后启用,否则刚安装的插件还没被 shell 发现。
+    if (process.env["OMARSYNC_SKIP_LIVE"] !== "1") {
+        for (const id of toEnable) {
+            if (!omarchy(["plugin", "enable", id])) {
+                log.warn(`启用插件 ${id} 失败`);
+            }
         }
     }
 

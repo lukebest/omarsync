@@ -87,15 +87,17 @@ ROOT=${OMARSYNC_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 # 自愈 shim:Omarchy 插件系统不会把插件的 bin/ 放进 PATH,
 # 但面板每次状态扫描都会跑到这里——趁机把 ~/.local/bin/omarsync 补上。
 # 只在自己创建的文件上更新,绝不覆盖用户已有的同名文件。
+# 接受任意 Omarchy 插件目录的旧 shim,这样插件改名或跨机器同步后也能自愈。
 shim="${HOME}/.local/bin/omarsync"
+plugin_root=${ROOT#"$HOME"/.config/omarchy/plugins/}
 shim_body="#!/bin/sh
-exec \"\$HOME/.config/omarchy/plugins/io.github.lukebest.omarsync/bin/omarsync\" \"\$@\""
+exec \"\$HOME/.config/omarchy/plugins/${plugin_root}/bin/omarsync\" \"\$@\""
 if [[ $ROOT == "$HOME/.config/omarchy/plugins/"* ]]; then
   if [[ ! -e $shim ]]; then
     /usr/bin/mkdir -p "${HOME}/.local/bin"
     printf '%s\n' "$shim_body" >"$shim"
     /usr/bin/chmod 755 "$shim"
-  elif [[ -f $shim && ! -L $shim ]] && /usr/bin/grep -q 'omarchy/plugins/io.github.lukebest.omarsync/bin/omarsync' "$shim" 2>/dev/null; then
+  elif [[ -f $shim && ! -L $shim ]] && /usr/bin/grep -qE '^exec "\$HOME/\.config/omarchy/plugins/[A-Za-z0-9._-]+/bin/omarsync" "\$@"$' "$shim" 2>/dev/null; then
     printf '%s\n' "$shim_body" >"$shim"
     /usr/bin/chmod 755 "$shim"
   fi
@@ -116,7 +118,7 @@ done
 
 # 写操作命令在执行前持锁(整个进程生命周期);status 等只读命令不取锁
 case "${1:-status}" in
-  push|pull|apply|sync|migrate)
+  push|pull|apply|sync|migrate|repair-remote)
     state="${HOME}/.local/state/omarsync"
     /usr/bin/mkdir -p "$state"
     exec 9>"${state}/omarsync.lock"
@@ -124,6 +126,7 @@ case "${1:-status}" in
       printf 'omarsync: another omarsync operation is running\n' >&2
       exit 1
     fi
+    export OMARSYNC_LOCK_HELD=1
     ;;
 esac
 

@@ -36,10 +36,11 @@ export interface ExecResult {
 }
 
 /** 执行并捕获输出;env 以 KEY=VALUE 形式附加(默认清空环境再加白名单) */
-export function capture(binary: string, args: readonly string[], env: readonly string[] = []): ExecResult {
+export function capture(binary: string, args: readonly string[], env: readonly string[] = [], input?: string): ExecResult {
     const result = spawnSync(binary, [...args], {
         env: commandEnv(env),
         encoding: "utf8",
+        input,
         maxBuffer: 64 * 1024 * 1024,
     });
 
@@ -55,7 +56,26 @@ function commandEnv(extra: readonly string[]): Record<string, string> {
         HOME: process.env["HOME"] ?? "",
         PATH: TRUSTED_DIRS.join(":"),
         LANG: "C.UTF-8",
+        OMARCHY_PATH: process.env["OMARCHY_PATH"] ?? "/usr/share/omarchy",
     };
+
+    // 图形会话变量:VS Code 等 GUI 工具需要靠它们连到当前 Wayland/X11 会话。
+    for (const name of [
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_RUNTIME_DIR",
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+        "DBUS_SESSION_BUS_ADDRESS",
+    ]) {
+        const value = process.env[name];
+
+        if (value) {
+            base[name] = value;
+        }
+    }
 
     for (const entry of extra) {
         const eq = entry.indexOf("=");

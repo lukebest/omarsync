@@ -12,7 +12,7 @@ import {
     markApplied,
     requireTrustedCommit,
     resolveRemoteSha,
-    trustSignerOfCommit,
+    trustRemoteSigner,
 } from "../lib/trust";
 import { confirm } from "../lib/util";
 
@@ -65,7 +65,8 @@ export async function executeApply(options: ApplyOptions): Promise<void> {
                 force = true;
                 log.warn(`强制应用 ${sha};跳过了签名检查`);
             } else {
-                await trustSignerOfCommit(mirror, sha, options.trustSigner === true);
+                // 不走 force:核对指纹后把签名者加入信任名单,本次 apply 即可带插件与 hooks
+                await trustRemoteSigner(mirror, sha, options.trustSigner === true);
             }
         }
 

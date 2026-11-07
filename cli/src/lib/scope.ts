@@ -5,6 +5,7 @@ import { isFile } from "./exec";
 import { die, log, readTextFile } from "./log";
 import * as mise from "./mise";
 import { paths } from "./paths";
+import { loadPushIgnore, pushIgnoreExcludes } from "./push-ignore";
 
 // scope 解析、安全校验,以及 scope → mise dot 跟踪条目的幂等对齐(reconcile)。
 // scope(~/.config/omarsync/scope)是唯一事实来源,且只信本机这份;
@@ -192,6 +193,10 @@ export function desiredExcludes(entries: readonly ScopeEntry[]): Set<string> {
                 set.add(glob);
             }
         }
+    }
+
+    for (const glob of pushIgnoreExcludes(loadPushIgnore())) {
+        set.add(glob);
     }
 
     return set;
