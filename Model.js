@@ -77,6 +77,7 @@ var copy = {
     dirtyAndBehind: function(n) { return "本地有改动待 push，远程还有 " + n + " 个提交待 apply" },
     dirty: "本地有改动，点 push 上传",
     behind: function(n) { return "远程有 " + n + " 个新提交，点 apply 恢复" },
+    behindUntrusted: function(n) { return "远程有 " + n + " 个新提交，签名者还没信任，先信任再 apply" },
     ahead: function(n) { return n + " 个提交还没上传到远程" },
     synced: "一切已同步",
     never: "从未",
@@ -103,6 +104,9 @@ var copy = {
     firstApply: function(sha) { return "首次应用 " + sha },
     otherKey: function(sha) { return "另一把密钥 " + sha },
     unsignedCommit: function(sha) { return "未签名 " + sha },
+    trustSigner: "信任签名者",
+    trustSignerDesc: function(fp) { return "核对指纹 " + fp + "，确认后本机以后都认它的提交" },
+    trustSignerTip: "公钥从远程提交自带的签名里提取，不用手动拷贝",
     legend: "暗云：还没设置。云：已同步。红上箭头：需要 push。红下箭头：需要 apply。红叹号：上次失败。",
     viewChanges: "查看改动",
     viewChangesDesc: "用 VS Code 打开这些文件，确认无误再 push",
@@ -163,6 +167,7 @@ var copy = {
     dirtyAndBehind: function(n) { return "Local changes need a push, and " + n + " remote commit(s) need apply" },
     dirty: "Local changes. Push to upload them",
     behind: function(n) { return n + " new remote commit(s). Apply to restore them" },
+    behindUntrusted: function(n) { return n + " new remote commit(s) from an untrusted signer. Trust them, then apply" },
     ahead: function(n) { return n + " commit(s) are not on the remote yet" },
     synced: "Everything is in sync",
     never: "never",
@@ -189,6 +194,9 @@ var copy = {
     firstApply: function(sha) { return "First apply " + sha },
     otherKey: function(sha) { return "Different key " + sha },
     unsignedCommit: function(sha) { return "Unsigned " + sha },
+    trustSigner: "Trust signer",
+    trustSignerDesc: function(fp) { return "Check fingerprint " + fp + ". Once trusted, this machine accepts their commits" },
+    trustSignerTip: "The public key comes from the commit's own signature — no file copying",
     legend: "Faded cloud: not set up. Cloud: up to date. Red up: push. Red down: apply. Red !: failed.",
     viewChanges: "Review changes",
     viewChangesDesc: "Open the files in VS Code, then push",
@@ -258,6 +266,8 @@ function statusSentence(sync, lang) {
     return tr(lang, "dirtyAndBehind", sync.behind)
   if (sync.dirty === true)
     return tr(lang, "dirty")
+  if ((sync.behind || 0) > 0 && sync.remoteSignature === "untrusted" && sync.hasTrustedKeys === true)
+    return tr(lang, "behindUntrusted", sync.behind)
   if ((sync.behind || 0) > 0)
     return tr(lang, "behind", sync.behind)
   if ((sync.ahead || 0) > 0)

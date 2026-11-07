@@ -239,6 +239,14 @@ BarWidget {
     root.runInTerminal(root.quotedCli() + " apply --commit " + sha)
   }
 
+  // 信任远程提交的签名者:公钥从提交自带的 gpgsig 里提取,终端里核对指纹确认即可
+  function trustRemoteSigner() {
+    var sha = Model.fullCommit(root.status.remoteCommit)
+    if (sha === "")
+      return
+    root.runInTerminal(root.quotedCli() + " trust-signer --commit " + sha)
+  }
+
   function openGitHubRepo(repo) {
     if (!Model.safeRepo(repo) || !root.bar || typeof root.bar.run !== "function")
       return

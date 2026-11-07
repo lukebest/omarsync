@@ -383,6 +383,21 @@ Panel {
         }
 
         ActionRow {
+          name: root.tr("trustSigner")
+          desc: root.tr("trustSignerDesc", root.sync.signerFingerprint)
+          tooltip: "omarsync trust-signer --commit " + root.trustedCommit.substring(0, 7)
+            + "\n" + root.tr("trustSignerTip")
+          // 已有信任密钥却遇到陌生签名者时,apply 会被信任链挡住;先显式信任再 apply。
+          // 没有任何信任密钥的新机器走 firstTrust 的 TOFU,不重复显示入口。
+          rowVisible: root.ready && root.trustedCommit !== ""
+            && root.sync.remoteSignature === "untrusted"
+            && root.sync.hasTrustedKeys === true
+          rowEnabled: !root.working
+          recommended: true
+          onTriggered: root.callHost("trustRemoteSigner")
+        }
+
+        ActionRow {
           name: root.working ? root.tr("applyRunning") : ((root.firstApply && root.sync.remoteSigned !== true) ? "apply this commit" : "apply")
           desc: root.tr("applyDesc")
           tooltip: root.applyTooltip()

@@ -5102,27 +5102,24 @@ function acceptFirstApply(mirror, sha) {
   log.info(`本机首次应用;提交 ${sha} 未签名`);
   log.info("之后的 apply 需要可信签名");
 }
-async function trustSignerOfCommit(mirror, sha, allowPrompt) {
+async function trustRemoteSigner(mirror, sha, allowPrompt) {
   const pub = signaturePubkeyLine(mirror, sha);
   const fp = pub ? fingerprintOfPubkeyLine(pub) : void 0;
-  if (trustedKeysPresent()) {
-    if (fp) {
-      die(`提交 ${sha} 由 ${fp} 签名,不在 ${paths.trustedKeysFile} 里。拒绝应用。`);
-    }
-    die(`提交 ${sha} 不是由 ${paths.trustedKeysFile} 里的密钥签名的。拒绝应用。`);
-  }
   if (!pub || !fp || !pubkeyVerifiesCommit(mirror, sha, pub)) {
-    die(`提交 ${sha} 未签名。拒绝应用。`);
+    die(`提交 ${sha} 未签名,或自带公钥验签失败。拒绝信任。`);
+  }
+  if (commitIsTrusted(mirror, sha)) {
+    log.info(`签名者 ${fp} 已在信任名单中,无需重复添加`);
+    return;
   }
   if (!allowPrompt) {
     if (stdinIsTty()) {
-      log.info("这台机器还没有信任过签名密钥");
-      log.info(`提交 ${sha} 由 ${fp} 签名`);
-      if (!await confirm("信任这把密钥并应用?")) {
+      log.info(`提交 ${sha} 的签名者指纹: ${fp}`);
+      if (!await confirm("确认信任这把密钥?")) {
         die("未信任该签名密钥");
       }
     } else {
-      die(`提交 ${sha} 由 ${fp} 签名,而本机还没信任过签名密钥。在终端里运行 apply 并确认,或加 --trust-signer。`);
+      die(`需要在终端里核对指纹 ${fp} 并确认,或加 --yes 跳过确认。`);
     }
   }
   rememberSigner(pub);
@@ -7152,7 +7149,7 @@ async function executeApply(options) {
         force = true;
         log.warn(`强制应用 ${sha};跳过了签名检查`);
       } else {
-        await trustSignerOfCommit(mirror, sha, options.trustSigner === true);
+        await trustRemoteSigner(mirror, sha, options.trustSigner === true);
       }
     }
     if (!commitIsTrusted(mirror, sha) && !first && !force) {
@@ -9018,6 +9015,26 @@ function executeSetup() {
   executeStatus(false);
 }
 
+async function executeTrustSigner(commit, yes) {
+  if (!isDir(`${paths.mirrorDir}/.git`)) {
+    die("未初始化。运行: omarsync init");
+  }
+  if (!isFullSha(commit)) {
+    die("用法: omarsync trust-signer --commit <远程尖端的40位sha>");
+  }
+  const mirror = paths.mirrorDir;
+  const branch = configGet("BRANCH", readTextFile) ?? "main";
+  if (!git(["-C", mirror, "fetch", "--quiet", "origin", branch])) {
+    die("fetch 失败,未修改信任名单");
+  }
+  const tip = gitOut(["-C", mirror, "rev-parse", "--verify", "--quiet", `origin/${branch}^{commit}`]);
+  if (tip !== commit) {
+    die(`指定提交不是当前远程尖端 ${tip ?? "?"};拒绝信任旧提交或其他提交`);
+  }
+  await trustRemoteSigner(mirror, commit, yes);
+  executeStatus(false);
+}
+
 const cli = a$1("omarsync", {
   packageName: "omarsync",
   packageVersion: "2.0.1"
@@ -9166,6 +9183,28 @@ cli.addCommand({
   description: "列出 mise dot 同步冲突,用本机编辑器打开审阅",
   execute: () => {
     executeConflicts();
+  }
+});
+cli.addCommand({
+  name: "trust-signer",
+  description: "从远程提交自带的签名提取公钥,核对指纹后加入信任名单(无需手动拷贝公钥)",
+  options: [
+    {
+      name: "commit",
+      type: String,
+      description: "远程尖端的 40 位 commit sha(必填)"
+    },
+    {
+      name: "yes",
+      type: Boolean,
+      description: "跳过指纹确认(仅供自动化)"
+    }
+  ],
+  execute: async ({ options }) => {
+    await executeTrustSigner(
+      typeof options["commit"] === "string" ? options["commit"] : void 0,
+      options["yes"] === true
+    );
   }
 });
 cli.addCommand({
