@@ -238,6 +238,6 @@ qmllint -I "${OMARCHY_PATH:-/usr/share/omarchy}/shell" BarWidget.qml Panel.qml
 
 `scripts/dev-install.sh` 在本机有 bun 时把 `cli/` 打包成 `dist/index.js`,再把本目录(排除 `cli/node_modules`)复制到 `~/.config/omarchy/plugins/io.github.lukebest.omarsync`。插件目录不允许符号链接,所以是真实复制。仓库里已经提交了 `cli/dist`,装好即可运行;改 CLI 源码后需要重新打包。
 
-CLI 开发:`cd cli && bun install` 后,`bun run dev -- <args>` 直接跑源码,`bun run typecheck` 做类型检查,`bun run build` 打包。技术栈与同步流程见 [docs/TECH_STACK.md](docs/TECH_STACK.md) 与 [docs/SYNC_FLOW.md](docs/SYNC_FLOW.md)。
+CLI 开发:`cd cli && bun install` 后,`bun run dev -- <args>` 直接跑源码,`bun run typecheck` 做类型检查,`bun run build` 打包。**新接手代码先读 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**(分层架构、数据布局、push/apply 链路、不可破坏的不变量);技术栈与同步流程见 [docs/TECH_STACK.md](docs/TECH_STACK.md) 与 [docs/SYNC_FLOW.md](docs/SYNC_FLOW.md)。
 
 `scripts/self-test.sh` 是关键路径冒烟测试:CLI 可用、`status --json` 字段与面板一致(含 `dotRepo` / `dotBranch`)、`status.json` 落在临时 HOME、非交互 apply 一律拒绝、插件 id 仍是 `io.github.lukebest.omarsync`。
