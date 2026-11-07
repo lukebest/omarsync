@@ -1,5 +1,6 @@
 import { resolveTool } from "./exec";
-import { git } from "./git";
+import { gitCaptureDetailed } from "./git";
+import { log } from "./log";
 
 // 统一的差异审阅入口:优先 VS Code 原生左右 Diff Editor(中间 gutter 带箭头按钮)。
 // 通过 -c 内联 difftool 定义,不依赖 git 版本是否内置 mergetools/vscode;
@@ -23,7 +24,8 @@ export function reviewWithVsCode(args: readonly string[]): boolean {
     }
 
     // $LOCAL/$REMOTE 必须字面传给 git,由 difftool 在调用时经 shell 展开。
-    return git([
+    // 用捕获而非透传:code --wait 仍会弹 GUI 并阻塞到标签关闭,同时把失败原因留下来。
+    const result = gitCaptureDetailed([
         "-c",
         `difftool.vscode.cmd=${code} --wait --diff $LOCAL $REMOTE`,
         "difftool",
@@ -31,4 +33,14 @@ export function reviewWithVsCode(args: readonly string[]): boolean {
         "--tool=vscode",
         ...args,
     ]);
+
+    if (result.ok) {
+        return true;
+    }
+
+    // 不再静默回退:把 git/code 的真实报错写进 last.log,面板看不到 diff 时能直接定位
+    const reason = result.stderr.trim() || result.stdout.trim() || `git difftool 退出码 ${result.code}`;
+    log.warn(`VS Code 左右对比没有启动,回退到文本 diff: ${reason}`);
+
+    return false;
 }

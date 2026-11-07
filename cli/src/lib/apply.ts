@@ -23,6 +23,9 @@ import { appliedStampFile, isFullSha } from "./trust";
 
 const HOME = homedir();
 
+// git 内置空树对象:首次应用没有上次基准时,用它作 diff 起点展示完整快照
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 export function pruneBackups(): void {
     const root = paths.backupDir;
 
@@ -506,39 +509,43 @@ export function applyMirror(mirror: string, withPackages: boolean, sha: string, 
     return !failed;
 }
 
-/** 合并前审查:显示自上次应用以来元数据仓库里的全部更改(只读) */
+/** 合并前审查:显示自上次应用以来元数据仓库里的全部更改(只读)。
+ *  首次应用没有基准 commit,用空树作起点,照样弹 VS Code 展示完整快照,不跳过审阅。 */
 export function showChanges(mirror: string, sha: string): void {
     const applied = (readTextFile(appliedStampFile()) ?? "").trim();
 
+    let base: string;
+    let firstApply = false;
+
     if (!isFullSha(applied)) {
-        log.info("没有应用过的 commit;这份快照将整体应用");
-
-        return;
-    }
-
-    if (applied === sha) {
+        base = EMPTY_TREE;
+        firstApply = true;
+        log.info("没有应用过的 commit;首次应用,下面展示完整快照供审阅");
+    } else if (applied === sha) {
         log.info("这台机器已经应用过这个 commit");
 
         return;
-    }
-
-    if (!gitCapture(["-C", mirror, "cat-file", "-e", `${applied}^{commit}`]).ok) {
+    } else if (!gitCapture(["-C", mirror, "cat-file", "-e", `${applied}^{commit}`]).ok) {
         log.info(`上次应用的 commit ${applied} 不在镜像里;无法 diff`);
 
         return;
+    } else {
+        base = applied;
+        log.info(`自上次应用的 commit ${applied.slice(0, 12)} 以来的更改:`);
     }
 
-    log.info(`自上次应用的 commit ${applied.slice(0, 12)} 以来的更改:`);
+    // 首次是全量快照,提交历史可能很长,不逐条打印;常规增量才列出 commit 清单
+    if (!firstApply) {
+        const logOut = gitOut(["-C", mirror, "log", "--oneline", "--no-decorate", `${base}..${sha}`]);
 
-    const logOut = gitOut(["-C", mirror, "log", "--oneline", "--no-decorate", `${applied}..${sha}`]);
-
-    if (logOut && /\S/.test(logOut)) {
-        for (const line of logOut.split("\n")) {
-            log.info(`  commit ${line}`);
+        if (logOut && /\S/.test(logOut)) {
+            for (const line of logOut.split("\n")) {
+                log.info(`  commit ${line}`);
+            }
         }
     }
 
-    const stat = gitOut(["-C", mirror, "diff", "--stat", applied, sha]);
+    const stat = gitOut(["-C", mirror, "diff", "--stat", base, sha]);
 
     if (stat && /\S/.test(stat)) {
         for (const line of stat.split("\n")) {
@@ -553,7 +560,7 @@ export function showChanges(mirror: string, sha: string): void {
     let review = "";
 
     for (const file of reviewFiles) {
-        const d = gitOut(["-C", mirror, "diff", "--color=never", applied, sha, "--", file]);
+        const d = gitOut(["-C", mirror, "diff", "--color=never", base, sha, "--", file]);
 
         if (d && /\S/.test(d)) {
             process.stdout.write(`${d}\n`);
@@ -563,13 +570,14 @@ export function showChanges(mirror: string, sha: string): void {
 
     if (review !== "") {
         // 优先 VS Code 左右 Diff Editor;无图形环境(如纯 SSH)再回退文本 diff。
-        if (reviewWithVsCode(["-C", mirror, applied, sha, "--", ...reviewFiles])) {
+        if (reviewWithVsCode(["-C", mirror, base, sha, "--", ...reviewFiles])) {
             return;
         }
 
         const reviewFile = `${paths.stateDir}/pending-apply.diff`;
+        const heading = firstApply ? "首次应用(完整快照)" : `自 ${base} 到 ${sha}`;
 
-        writeFileSync(reviewFile, `自 ${applied} 到 ${sha} 的元数据更改\n\n${review}`);
+        writeFileSync(reviewFile, `${heading} 的元数据更改\n\n${review}`);
         log.info(`完整 diff 已写入 ${reviewFile}`);
         openInEditor([reviewFile]);
     }

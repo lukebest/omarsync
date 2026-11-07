@@ -37,6 +37,18 @@ export function gitCapture(args: readonly string[]): { ok: boolean; code: number
     return { ok: result.code === 0, code: result.code, out: result.stdout };
 }
 
+/** 捕获完整输出(含 stderr);用于外部 diff 工具这类需要失败原因的场景 */
+export function gitCaptureDetailed(args: readonly string[]): {
+    ok: boolean;
+    code: number;
+    stdout: string;
+    stderr: string;
+} {
+    const result = capture(gitBin(), [...baseArgs(), ...args], assignments());
+
+    return { ok: result.code === 0, code: result.code, stdout: result.stdout, stderr: result.stderr };
+}
+
 /** 带额外环境变量捕获输出(GIT_INDEX_FILE 等 plumbing 用) */
 export function gitCaptureEnv(args: readonly string[], extraEnv: readonly string[]): { ok: boolean; code: number; out: string } {
     const result = capture(gitBin(), [...baseArgs(), ...args], [...assignments(), ...extraEnv]);
